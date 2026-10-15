@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      NETSPACE_DATABASE_URL: sqlite:////data/netspace.db
+      NETSPACE_CORS_ORIGINS: '["http://localhost:8080"]'
+    volumes:
+      - netspace-data:/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  netspace-data:
