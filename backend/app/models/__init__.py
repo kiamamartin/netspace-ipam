@@ -7,6 +7,7 @@ from app.models.department import Department
 from app.models.ip_address import IPAddress
 from app.models.network import Network
 from app.models.subnet import Subnet
+from app.models.user import User
 
 __all__ = [
     "AllocationPlan",
@@ -17,5 +18,6 @@ __all__ = [
     "Network",
     "Subnet",
     "TimestampMixin",
+    "User",
     "utcnow",
 ]

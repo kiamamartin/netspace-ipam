@@ -1,0 +1,97 @@
+{
+  "roadmap": "MILESTONES.md",
+  "updated": "2026-10-23",
+  "note": "Machine-readable mirror of MILESTONES.md gate statuses. A gate is a milestone-status, not progress claims. Evidence lives in the evidence_path of each milestone.",
+  "milestones": {
+    "M0": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m0-baseline.md",
+      "executed_evidence": [
+        "git status --short captured (14 modified tracked files, untracked additions recorded; all preserved)",
+        "backend/.venv/Scripts/python.exe -m pytest -q -> 155 passed, exit 0",
+        "backend ruff check . -> All checks passed, exit 0",
+        "GET /health -> 200 with JSON body recorded",
+        "GET /api/v1/dashboard/summary -> 200 with seeded metrics",
+        "vite dev server :5173 -> HTTP 200",
+        "frontend node smoke.mjs -> all checks PASS (headless, --disable-gpu)",
+        "npm run build -> exit 0",
+        "alembic upgrade head -> FAILS on legacy seeded DB (risk R-01, documented, not fixed in M0)"
+      ],
+      "definition_of_done": "docs/baseline/m0-baseline.md §6"
+    },
+    "M1": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m1-foundation.md",
+      "gate_command": "bash scripts/verify-setup.sh (documented make verify-setup equivalent)",
+      "executed_evidence": [
+        "scripts/verify-setup.sh -> ALL GATES PASS, exit 0 (venv, pip check, lock sha, ruff, pytest 155, npm ls, oxlint, secret hygiene, health 200)",
+        "fresh throwaway venv from backend/requirements.lock (42 pins) -> import app.main OK, exit 0",
+        "pip check -> No broken requirements found, exit 0 (greenlet restored to SQLAlchemy-declared graph)",
+        "secret scan of backend/app -> 0 matches; backend/.env untracked"
+      ],
+      "definition_of_done": "docs/baseline/m1-foundation.md §universal-definition-of-done"
+    },
+    "M2": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m2-m3-calculator-vlsm.md",
+      "test_command_substitution": "pytest backend/tests/test_subnet_calculator.py backend/tests/test_calculator_vectors.py -v (flat layout; roadmap path backend/tests/unit/... does not exist)",
+      "executed_evidence": [
+        "test_subnet_calculator.py -> 55 passed",
+        "tests/test_calculator_vectors.py (NEW) -> 14 passed incl. IPv4/IPv6/0 boundaries, /31 /32 /127 /128 vectors",
+        "independent bit-math reference (no ipaddress) cross-checked against the engine on every vector",
+        "full backend suite -> 180 passed; ruff clean"
+      ]
+    },
+    "M3": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m2-m3-calculator-vlsm.md",
+      "test_command_substitution": "pytest backend/tests/test_vlsm_allocator.py backend/tests/test_m3_scenario.py -v (flat layout)",
+      "executed_evidence": [
+        "tests/test_m3_scenario.py (NEW) -> 11 passed: mandatory scenario table (100->/25, 50->/26, 25->/27, 10->/28 in 192.168.10.0/24), alignment/containment/no-overlap/network+broadcast semantics",
+        "insufficient capacity rejected before returning allocations (2x200 in /24; 3x60 in /25)",
+        "determinism: identical plans across repeat and reordered inputs",
+        "summary: 240/256 allocated, 16 remaining, single contiguous range"
+      ]
+    },
+    "M4": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m4-api-persistence.md",
+      "test_command_substitution": "pytest backend/tests/test_api_calculator.py backend/tests/test_api_inventory.py backend/tests/test_api_plans.py backend/tests/test_reports.py -q (flat layout; backend/tests/integration/ does not exist)",
+      "executed_evidence": [
+        "API/CRUD/reports tests -> 61 passed, exit 0",
+        "migration drill on isolated empty DB: alembic upgrade head -> 0001 (exit 0), alembic downgrade base -> base (exit 0); drill DB removed",
+        "OpenAPI schema served at /api/v1/openapi.json (HTTP 200, paths verified under /api/v1)",
+        "transaction rollback evidence: test_plan_activation_conflicts_with_existing_subnet; test_subnet_create_and_overlap_conflict"
+      ],
+      "known_risk_refs": ["R-01"]
+    },
+    "M5": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m5-auth-authz.md",
+      "test_command_substitution": "pytest backend/tests/test_auth.py backend/tests/test_api_inventory.py backend/tests/test_api_plans.py -v (flat layout; roadmap paths backend/tests/security/ and backend/tests/integration/test_auth.py do not exist)",
+      "executed_evidence": [
+        "test_auth.py -> 11 passed: anonymous write denial (all mutating endpoints), invalid token rejection, role matrix (operator writes / viewer 403 across networks, subnets, departments, IPs, plans), user admin admin-only, last admin self-removal blocked, audit events admin-only, login rate limiting, request body size limiting, audit event emission on write, audit tracking of user creation",
+        "test_api_inventory.py -> 22 passed (admin token fixture; audit-events now admin-only)",
+        "test_api_plans.py -> 9 passed",
+        "test_reports.py -> 9 passed",
+        "Full backend suite -> 191 passed, ruff clean"
+      ],
+      "definition_of_done": "docs/baseline/m5-auth-authz.md §universal-definition-of-done"
+    },
+    "M6": { "status": "NOT STARTED", "known_risk_refs": ["R-03"] },
+    "M7": { "status": "NOT STARTED" },
+    "M8": { "status": "NOT STARTED" },
+    "M9": { "status": "NOT STARTED" },
+    "M10": { "status": "NOT STARTED", "known_risk_refs": ["R-05"] },
+    "M11": { "status": "NOT STARTED" }
+  },
+  "risks": {
+    "R-01": "Legacy seeded SQLite DB lacks alembic_version; alembic upgrade head fails 'table departments already exists'. Remedy scheduled for M4 (persisted-persistence milestone).",
+    "R-02": "Windows Application Control blocks SQLAlchemy 2.1.x compiled DLLs; repository currently runs SQLAlchemy 2.0.55 (pure-python wheel, within sqlalchemy>=2.0).",
+    "R-03": "GPU compositor previously composited CSS filter/backdrop-filter layers above portaled dialog content; dialogs now use a fully transparent backdrop (operator decision).",
+    "R-04": "Headless UI tests run with --disable-gpu; GPU-only regressions cannot be detected by automation.",
+    "R-05": "Docker daemon availability unknown to the baseline; M10 verification may be BLOCKED.",
+    "R-06": "Single-commit history with large uncommitted operator changes; preserve, do not stage or commit without authorization.",
+    "R-07": "CRLF/LF autocrlf conversion warnings; avoid normalizing untouched files."
+  }
+}

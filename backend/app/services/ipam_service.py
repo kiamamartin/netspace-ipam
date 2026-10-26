@@ -1,148 +1,97 @@
-"""IPAM persistence service.
-
-All database mutations go through this module so that validation (containment,
-alignment, overlap, referential integrity) is enforced uniformly. Route
-handlers stay thin: parse -> call service -> serialize.
-"""
-
-from __future__ import annotations
-
 import ipaddress
-import math
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.errors import AppError, conflict, not_found, validation_error
 from app.models import (
     AllocationPlan,
-    AuditEvent,
     Department,
     IPAddress,
     Network,
     Subnet,
 )
-from app.schemas.calculator import AllocationPolicyInput, VLSMDepartment
-from app.schemas.inventory import NetworkRead
+from app.models.audit import AuditEvent
+from app.schemas.inventory import (
+    AllocationPolicyInput,
+    VLSMDepartment,
+)
 from app.services.subnet_calculator import (
     SubnetCalculationError,
-    parse_address,
     parse_network,
     subnet_details,
-    usable_capacity,
 )
-from app.services.vlsm_allocator import (
-    AllocationPolicy,
-    DepartmentRequirement,
-    VLSMError,
-    allocate,
-)
-
-settings = get_settings()
-
-SUBNET_ACTIVE_STATES = ("allocated", "planned", "reserved")
-
+from app.services.vlsm_allocator import allocate
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Shared helpers
 # ---------------------------------------------------------------------------
+
 
 def _audit(
     db: Session,
     resource_type: str,
-    resource_id: str | int,
+    resource_id: int,
     action: str,
-    summary: str,
+    summary: str | None = None,
     actor: str | None = None,
 ) -> None:
     db.add(
         AuditEvent(
+            actor=actor,
             resource_type=resource_type,
             resource_id=str(resource_id),
             action=action,
             summary=summary,
-            actor=actor,
         )
     )
 
 
-def _policy_from_input(policy: AllocationPolicyInput | dict[str, Any] | None) -> AllocationPolicy:
+def _policy_from_input(
+    policy: AllocationPolicyInput | dict[str, Any] | None,
+) -> AllocationPolicyInput:
     if isinstance(policy, dict):
-        policy = AllocationPolicyInput(**policy)
-    policy = policy or AllocationPolicyInput()
-    return AllocationPolicy(
-        allow_point_to_point=policy.allow_point_to_point,
-        allow_host_route=policy.allow_host_route,
-        growth_percent=policy.growth_percent,
-        utilization_warning_threshold=policy.utilization_warning_threshold,
-        max_departments=settings.max_departments_per_plan,
-    )
+        return AllocationPolicyInput(**policy)
+    return policy or AllocationPolicyInput()
 
 
-def requirements_from_schemas(depts: list[VLSMDepartment] | list[dict[str, Any]]) -> list[DepartmentRequirement]:
-    normalized = [d if isinstance(d, VLSMDepartment) else VLSMDepartment(**d) for d in depts]
-    return [
-        DepartmentRequirement(
-            name=d.name.strip(),
-            required_hosts=d.required_hosts,
-            department_id=d.department_id,
-            description=d.description,
-            vlan_id=d.vlan_id,
-            gateway=d.gateway,
-            additional_reserved_addresses=d.additional_reserved_addresses,
-            growth_percent=d.growth_percent,
-            prefix_length=d.prefix_length,
-            allow_point_to_point=d.allow_point_to_point,
-            allow_host_route=d.allow_host_route,
-        )
-        for d in normalized
-    ]
-
-
-def _vlsm_error_to_app_error(exc: VLSMError) -> AppError:
-    status = 409 if exc.code == "insufficient_space" else 422
-    return AppError(exc.code, exc.message, status, exc.details)
-
-
-def _parse_cidr_or_422(value: str, field: str, family: int | None = None) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
+def _parse_cidr_or_422(cidr: str, field: str = "cidr", family: int | None = None):
     try:
-        return parse_network(value, family=family)
+        net = parse_network(cidr, family=family)
     except SubnetCalculationError as exc:
-        raise validation_error(exc.message, [{"field": field, "message": exc.message}]) from exc
+        # codified so the app error handler maps it to 422 validation_error
+        raise ValueError("invalid_cidr") from exc
+    return net
 
 
-def paginate(items: list[Any], page: int, page_size: int) -> dict[str, Any]:
-    page = max(page, 1)
-    page_size = max(min(page_size, settings.max_page_size), 1)
-    total = len(items)
-    pages = max(math.ceil(total / page_size), 1) if total else 0
-    start = (page - 1) * page_size
-    return {
-        "items": items[start : start + page_size],
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "pages": pages,
-    }
+SUBNET_ACTIVE_STATES = frozenset({"allocated", "active"})
+
+
+def _vlsm_error_to_app_error(exc: Any) -> ValueError:
+    """Translate allocator errors into codified ValueErrors (HTTP status mapping
+    lives in app.core.errors). ``InsufficientSpaceError`` carries the allocator
+    code ``insufficient_space`` (a capacity conflict -> 409)."""
+    if exc.code in ("insufficient_space", "insufficient_capacity", "not_enough_subnets"):
+        return ValueError(exc.code)
+    return ValueError("vlsm_error")
 
 
 # ---------------------------------------------------------------------------
 # Networks
 # ---------------------------------------------------------------------------
 
-def create_network(db: Session, data: dict[str, Any]) -> Network:
+
+def create_network(db: Session, data: dict[str, Any], actor: str | None = None) -> Network:
     net = _parse_cidr_or_422(data["cidr"], "cidr")
-    existing_name = db.scalar(select(Network).where(func.lower(Network.name) == data["name"].strip().lower()))
+    existing_name = db.scalar(
+        select(Network).where(func.lower(Network.name) == data["name"].strip().lower())
+    )
     if existing_name:
-        raise conflict("duplicate_name", f"A network named '{data['name']}' already exists")
+        raise ValueError("duplicate_name")
     existing_cidr = db.scalar(select(Network).where(Network.cidr == str(net)))
     if existing_cidr:
-        raise conflict(
-            "duplicate_cidr",
-            f"Network '{existing_cidr.name}' already manages {net}",
-        )
+        raise ValueError("duplicate_cidr")
     obj = Network(
         name=data["name"].strip(),
         cidr=str(net),
@@ -154,7 +103,7 @@ def create_network(db: Session, data: dict[str, Any]) -> Network:
     )
     db.add(obj)
     db.flush()
-    _audit(db, "network", obj.id, "create", f"Created network {obj.name} ({obj.cidr})")
+    _audit(db, "network", obj.id, "create", f"Created network {obj.name} ({obj.cidr})", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
@@ -200,28 +149,58 @@ def list_networks(
         "environment": Network.environment,
         "status": Network.status,
     }.get(sort, Network.created_at)
-    stmt = stmt.order_by(sort_col.desc() if order.lower() == "desc" else sort_col.asc())
+    stmt = stmt.order_by(
+        sort_col.desc() if order.lower() == "desc" else sort_col.asc()
+    )
     rows = list(db.scalars(stmt).all())
-    page_data = paginate(rows, page, page_size)
-    page_data["items"] = [NetworkRead.model_validate(r).model_dump(mode="json") for r in page_data["items"]]
-    return page_data
+    items = [
+        {
+            "id": r.id,
+            "name": r.name,
+            "cidr": r.cidr,
+            "family": r.family,
+            "environment": r.environment,
+            "site": r.site,
+            "status": r.status,
+            "description": r.description,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        }
+        for r in rows
+    ]
+    start = (page - 1) * page_size
+    total = len(items)
+    paged = items[start : start + page_size]
+    pages = max(1, -(-total // page_size))
+    return {"items": paged, "page": page, "page_size": page_size, "total": total, "pages": pages}
 
 
-def get_network(db: Session, network_id: int) -> Network:
-    obj = db.get(Network, network_id)
-    if not obj:
-        raise not_found("Network", network_id)
-    return obj
+def get_network(db: Session, network_id: int) -> Network | None:
+    return db.get(Network, network_id)
 
 
 def network_detail(db: Session, network_id: int) -> dict[str, Any]:
     obj = get_network(db, network_id)
     detail = subnet_details(parse_network(obj.cidr))
     return {
-        **NetworkRead.model_validate(obj).model_dump(mode="json"),
+        **{
+            "id": obj.id,
+            "name": obj.name,
+            "cidr": obj.cidr,
+            "family": obj.family,
+            "environment": obj.environment,
+            "site": obj.site,
+            "status": obj.status,
+            "description": obj.description,
+            "created_at": obj.created_at.isoformat() if obj.created_at else None,
+            "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
+        },
         "details": detail,
         "subnets": [
-            subnet_summary_data(s) for s in sorted(obj.subnets, key=lambda s: int(ipaddress.ip_network(s.cidr).network_address))
+            subnet_summary_data(s)
+            for s in sorted(
+                obj.subnets, key=lambda s: int(ipaddress.ip_network(s.cidr).network_address)
+            )
         ],
     }
 
@@ -241,39 +220,42 @@ def subnet_summary_data(s: Subnet) -> dict[str, Any]:
     }
 
 
-def update_network(db: Session, network_id: int, data: dict[str, Any]) -> Network:
+def update_network(
+    db: Session, network_id: int, data: dict[str, Any], actor: str | None = None
+) -> Network:
     obj = get_network(db, network_id)
+    if not obj:
+        raise ValueError("not_found")
     if "name" in data and data["name"]:
         dup = db.scalar(
             select(Network).where(
-                func.lower(Network.name) == data["name"].strip().lower(),
-                Network.id != network_id,
+                and_(Network.id != network_id, func.lower(Network.name) == data["name"].strip().lower())
             )
         )
         if dup:
-            raise conflict("duplicate_name", f"A network named '{data['name']}' already exists")
+            raise ValueError("duplicate_name")
         obj.name = data["name"].strip()
-    for field in ("description", "environment", "site", "status"):
-        if field in data and data[field] is not None:
-            setattr(obj, field, data[field])
+    if "environment" in data:
+        obj.environment = data["environment"]
+    if "site" in data:
+        obj.site = data["site"]
+    if "description" in data:
+        obj.description = data["description"]
+    if "status" in data:
+        obj.status = data["status"]
     db.flush()
-    _audit(db, "network", obj.id, "update", f"Updated network {obj.name}")
+    _audit(db, "network", obj.id, "update", f"Updated network {obj.name}", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
 
 
-def delete_network(db: Session, network_id: int) -> None:
+def delete_network(db: Session, network_id: int, actor: str | None = None) -> None:
     obj = get_network(db, network_id)
     active = [s for s in obj.subnets if s.status in SUBNET_ACTIVE_STATES]
     if active:
-        raise conflict(
-            "network_not_empty",
-            f"Network '{obj.name}' has {len(active)} active subnet(s); "
-            "delete or release them first",
-            [{"subnet_id": s.id, "cidr": s.cidr, "status": s.status} for s in active],
-        )
-    _audit(db, "network", obj.id, "delete", f"Deleted network {obj.name} ({obj.cidr})")
+        raise ValueError("network_not_empty")
+    _audit(db, "network", obj.id, "delete", f"Deleted network {obj.name} ({obj.cidr})", actor=actor)
     db.delete(obj)
     db.commit()
 
@@ -281,6 +263,7 @@ def delete_network(db: Session, network_id: int) -> None:
 # ---------------------------------------------------------------------------
 # Subnets
 # ---------------------------------------------------------------------------
+
 
 def _check_subnet_geometry(
     db: Session,
@@ -290,74 +273,51 @@ def _check_subnet_geometry(
     exclude_id: int | None = None,
 ) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ipaddress.IPv4Address | ipaddress.IPv6Address | None]:
     net = _parse_cidr_or_422(cidr, "cidr", family=parent.family)
-    # reject input that only matches after host bits are cleared (e.g. 10.0.0.5/24)
-    text = cidr.strip()
-    if "/" in text:
-        try:
-            ipaddress.ip_network(text, strict=True)
-        except ValueError as exc:
-            raise validation_error(
-                f"'{text}' has host bits set; use the network address {net}",
-                [{"field": "cidr", "message": "network address does not match its prefix length"}],
-            ) from exc
-    parent_net = parse_network(parent.cidr)
-    if net.version != parent_net.version:
-        raise validation_error("Address family mismatch between subnet and parent network")
+    # host-bit alignment (192.168.10.32/26 is a valid address, not a network boundary)
+    try:
+        ipaddress.ip_network(cidr, strict=True)
+    except ValueError as exc:
+        raise ValueError("misaligned_prefix") from exc
+    # the child subnet must live inside its parent network
+    parent_net = ipaddress.ip_network(parent.cidr)
     if not net.subnet_of(parent_net):
-        raise validation_error(
-            f"{net} is not contained within parent network {parent.cidr}",
-            [{"field": "cidr", "message": f"must be inside {parent.cidr}"}],
-        )
-    block = 1 << (net.max_prefixlen - net.prefixlen)
-    if int(net.network_address) % block != 0:
-        raise validation_error(
-            f"{net} is not aligned to a /{net.prefixlen} boundary",
-            [{"field": "cidr", "message": "network address does not match its prefix length"}],
-        )
-    # overlap with other active subnets of the same parent
-    stmt = select(Subnet).where(
-        Subnet.network_id == parent.id,
-        Subnet.status.in_(SUBNET_ACTIVE_STATES),
-    )
-    if exclude_id:
-        stmt = stmt.where(Subnet.id != exclude_id)
-    for other in db.scalars(stmt):
-        other_net = parse_network(other.cidr)
-        if net.overlaps(other_net):
-            raise conflict(
-                "overlap",
-                f"{net} overlaps existing subnet '{other.name}' ({other.cidr})",
-                [{"subnet_id": other.id, "cidr": other.cidr}],
-            )
-    gw_addr = None
+        raise ValueError("cidr_outside_parent")
     if gateway:
-        try:
-            gw_addr = parse_address(gateway, family=net.version)
-        except SubnetCalculationError as exc:
-            raise validation_error(exc.message, [{"field": "gateway", "message": exc.message}]) from exc
-        if not ipaddress.ip_network((gw_addr, gw_addr.max_prefixlen)).subnet_of(net):
-            raise validation_error(
-                f"Gateway {gw_addr} is outside subnet {net}",
-                [{"field": "gateway", "message": "must be inside the subnet"}],
-            )
-        if net.version == 4 and net.prefixlen <= 30 and gw_addr in (net.network_address, net.broadcast_address):
-            raise validation_error(
-                f"Gateway {gw_addr} is the network or broadcast address of {net}",
-                [{"field": "gateway", "message": "cannot be network/broadcast address"}],
-            )
+        gw_addr = ipaddress.ip_address(gateway)
+        if ipaddress.ip_address(gateway) not in net:
+            raise ValueError("gateway_out_of_range")
+        # the gateway cannot be the network or broadcast address (IPv4, non /31, /32)
+        if (
+            gw_addr.version == 4
+            and net.prefixlen not in (31, 32)
+            and gw_addr in (net.network_address, net.broadcast_address)
+        ):
+            raise ValueError("gateway_reserved")
+    else:
+        gw_addr = None
     return net, gw_addr
 
 
-def create_subnet(db: Session, data: dict[str, Any]) -> Subnet:
+def create_subnet(db: Session, data: dict[str, Any], actor: str | None = None) -> Subnet:
     parent = get_network(db, data["network_id"])
     net, _ = _check_subnet_geometry(db, parent, data["cidr"], data.get("gateway"))
     dup = db.scalar(
         select(Subnet).where(Subnet.network_id == parent.id, Subnet.cidr == str(net))
     )
     if dup and dup.status != "released":
-        raise conflict("duplicate_cidr", f"Subnet {net} already exists in network '{parent.name}'")
+        raise ValueError("duplicate_cidr")
+    # overlapping active/released-pending siblings of the same parent are conflicts
+    for other in db.scalars(
+        select(Subnet).where(
+            Subnet.network_id == parent.id,
+            Subnet.status != "released",
+        )
+    ):
+        if dup is not None and other.id == dup.id:
+            continue
+        if net.overlaps(ipaddress.ip_network(other.cidr)):
+            raise ValueError("overlap")
     if dup:
-        # a released subnet owns the CIDR row; re-allocate it in place
         obj = dup
         obj.name = data["name"].strip()
         obj.prefix_length = net.prefixlen
@@ -366,7 +326,7 @@ def create_subnet(db: Session, data: dict[str, Any]) -> Subnet:
         obj.status = data.get("status", "allocated")
         obj.description = data.get("description")
         db.flush()
-        _audit(db, "subnet", obj.id, "create", f"Re-allocated subnet {obj.name} ({obj.cidr}) in {parent.name}")
+        _audit(db, "subnet", obj.id, "create", f"Re-allocated subnet {obj.name} ({obj.cidr}) in {parent.name}", actor=actor)
         db.commit()
         db.refresh(obj)
         return obj
@@ -382,7 +342,7 @@ def create_subnet(db: Session, data: dict[str, Any]) -> Subnet:
     )
     db.add(obj)
     db.flush()
-    _audit(db, "subnet", obj.id, "create", f"Created subnet {obj.name} ({obj.cidr}) in {parent.name}")
+    _audit(db, "subnet", obj.id, "create", f"Created subnet {obj.name} ({obj.cidr}) in {parent.name}", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
@@ -396,7 +356,7 @@ def list_subnets(
     q: str | None = None,
     network_id: int | None = None,
     vlan_id: int | None = None,
-    status: str | None = None,
+    status_filter: str | None = None,
     family: int | None = None,
     sort: str = "created_at",
     order: str = "desc",
@@ -417,8 +377,8 @@ def list_subnets(
         stmt = stmt.where(Subnet.network_id == network_id)
     if vlan_id is not None:
         stmt = stmt.where(Subnet.vlan_id == vlan_id)
-    if status:
-        stmt = stmt.where(Subnet.status == status)
+    if status_filter:
+        stmt = stmt.where(Subnet.status == status_filter)
     if family:
         stmt = stmt.where(Network.family == family)
     sort_col = {
@@ -429,70 +389,71 @@ def list_subnets(
         "updated_at": Subnet.updated_at,
         "status": Subnet.status,
     }.get(sort, Subnet.created_at)
-    stmt = stmt.order_by(sort_col.desc() if order.lower() == "desc" else sort_col.asc())
+    stmt = stmt.order_by(
+        sort_col.desc() if order.lower() == "desc" else sort_col.asc()
+    )
     rows = list(db.scalars(stmt).unique().all())
-    page_data = paginate(rows, page, page_size)
-    items = []
-    for r in page_data["items"]:
-        try:
-            details = subnet_details(parse_network(r.cidr))
-        except SubnetCalculationError:
-            details = {}
-        items.append(
-            {
-                **subnet_summary_data(r),
-                "network_id": r.network_id,
-                "family": details.get("family", 4),
-                "details": details,
-                "ip_address_count": len(r.ip_addresses),
-            }
-        )
-    page_data["items"] = items
-    return page_data
+    items = [
+        {
+            "id": r.id,
+            "name": r.name,
+            "cidr": r.cidr,
+            "prefix_length": r.prefix_length,
+            "vlan_id": r.vlan_id,
+            "gateway": r.gateway,
+            "status": r.status,
+            "description": r.description,
+            "network_id": r.network_id,
+            "family": r.network.family,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        }
+        for r in rows
+    ]
+    start = (page - 1) * page_size
+    total = len(items)
+    paged = items[start : start + page_size]
+    pages = max(1, -(-total // page_size))
+    return {"items": paged, "page": page, "page_size": page_size, "total": total, "pages": pages}
 
 
 def get_subnet(db: Session, subnet_id: int) -> Subnet:
     obj = db.get(Subnet, subnet_id)
     if not obj:
-        raise not_found("Subnet", subnet_id)
+        raise ValueError("not_found")
     return obj
 
 
-def update_subnet(db: Session, subnet_id: int, data: dict[str, Any]) -> Subnet:
+def update_subnet(
+    db: Session, subnet_id: int, data: dict[str, Any], actor: str | None = None
+) -> Subnet:
     obj = get_subnet(db, subnet_id)
     parent = get_network(db, obj.network_id)
-    new_cidr = data.get("cidr") or obj.cidr
-    new_gateway = data.get("gateway", obj.gateway)
-    if "gateway" in data and data["gateway"] is None:
-        new_gateway = None
-    net, _ = _check_subnet_geometry(db, parent, new_cidr, new_gateway, exclude_id=obj.id)
-    obj.cidr = str(net)
-    obj.prefix_length = net.prefixlen
-    obj.gateway = new_gateway
-    for field in ("name", "vlan_id", "status", "description"):
-        if field in data:
-            setattr(obj, field, data[field])
+    if "name" in data and data["name"]:
+        obj.name = data["name"].strip()
+    if "gateway" in data and data["gateway"] is not None:
+        net, gw_addr = _check_subnet_geometry(db, parent, obj.cidr, data["gateway"], exclude_id=subnet_id)
+        obj.gateway = str(gw_addr) if gw_addr else None
+    if "status" in data:
+        obj.status = data["status"]
+    if "description" in data:
+        obj.description = data["description"]
     db.flush()
-    _audit(db, "subnet", obj.id, "update", f"Updated subnet {obj.name} ({obj.cidr})")
+    _audit(db, "subnet", obj.id, "update", f"Updated subnet {obj.name} ({obj.cidr})", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
 
 
-def delete_subnet(db: Session, subnet_id: int, force: bool = False) -> None:
+def delete_subnet(
+    db: Session, subnet_id: int, *, force: bool = False, actor: str | None = None
+) -> None:
     obj = get_subnet(db, subnet_id)
-    blocking = [
-        ip for ip in obj.ip_addresses
-        if ip.status in ("assigned", "reserved")
-    ]
-    if blocking and not force:
-        raise conflict(
-            "subnet_not_empty",
-            f"Subnet '{obj.name}' has {len(blocking)} assigned/reserved address(es); "
-            "delete them first or pass force=true",
-            [{"address_id": ip.id, "address": ip.address, "status": ip.status} for ip in blocking],
-        )
-    _audit(db, "subnet", obj.id, "delete", f"Deleted subnet {obj.name} ({obj.cidr})")
+    if not force:
+        active = [ip for ip in obj.ip_addresses if ip.status in ("assigned", "reserved")]
+        if active:
+            raise ValueError("subnet_not_empty")
+    _audit(db, "subnet", obj.id, "delete", f"Deleted subnet {obj.name} ({obj.cidr} in {obj.network.name})", actor=actor)
     db.delete(obj)
     db.commit()
 
@@ -501,66 +462,57 @@ def delete_subnet(db: Session, subnet_id: int, force: bool = False) -> None:
 # IP addresses
 # ---------------------------------------------------------------------------
 
-def create_ip_address(db: Session, data: dict[str, Any]) -> IPAddress:
-    subnet = get_subnet(db, data["subnet_id"])
+
+def create_ip_address(db: Session, data: dict[str, Any], actor: str | None = None) -> IPAddress:
+    subnet = get_subnet(db, data["subnet_id"])  # raises ValueError("not_found") -> 404
     try:
-        addr = parse_address(data["address"], family=None)
-    except SubnetCalculationError as exc:
-        raise validation_error(exc.message, [{"field": "address", "message": exc.message}]) from exc
-    parent = get_network(db, subnet.network_id)
-    if addr.version != parent.family:
-        raise validation_error(
-            f"Address {addr} is IPv{addr.version} but subnet is IPv{parent.family}"
-        )
-    subnet_net = parse_network(subnet.cidr)
-    if not ipaddress.ip_network((addr, addr.max_prefixlen)).subnet_of(subnet_net):
-        raise validation_error(
-            f"Address {addr} is outside subnet {subnet.cidr}",
-            [{"field": "address", "message": f"must be inside {subnet.cidr}"}],
-        )
+        addr = ipaddress.ip_address(data["address"])
+    except ValueError as exc:
+        raise ValueError("invalid_address") from exc
+    net = ipaddress.ip_network(subnet.cidr)
+    # the address must belong to the subnet it is registered in
+    if addr not in net:
+        raise ValueError("address_outside_subnet")
+    # the network and broadcast addresses are reserved (IPv4, non /31, /32)
     if (
         addr.version == 4
-        and subnet_net.prefixlen <= 30
-        and addr in (subnet_net.network_address, subnet_net.broadcast_address)
+        and net.prefixlen not in (31, 32)
+        and addr in (net.network_address, net.broadcast_address)
     ):
-        raise validation_error(
-            f"{addr} is the network or broadcast address of {subnet.cidr}",
-            [{"field": "address", "message": "cannot register network/broadcast address"}],
-        )
+        raise ValueError("reserved_address")
     dup = db.scalar(
-        select(IPAddress).where(IPAddress.subnet_id == subnet.id, IPAddress.address == str(addr))
+        select(IPAddress).where(
+            IPAddress.subnet_id == subnet.id, IPAddress.address == data["address"]
+        )
     )
-    if dup and dup.status != "deprecated":
-        raise conflict(
-            "duplicate_assignment",
-            f"{addr} is already registered in this subnet with status '{dup.status}'",
-            [{"address_id": dup.id}],
-        )
-    if data.get("department_id") and not db.get(Department, data["department_id"]):
-        raise not_found("Department", data["department_id"])
     if dup is not None:
-        # Reuse the deprecated record so the (subnet, address) unique constraint holds.
-        obj = dup
-        obj.hostname = data.get("hostname")
-        obj.device = data.get("device")
-        obj.department_id = data.get("department_id")
-        obj.status = data.get("status", "assigned")
-        obj.description = data.get("description")
-        obj.family = addr.version
-    else:
-        obj = IPAddress(
-            address=str(addr),
-            family=addr.version,
-            subnet_id=subnet.id,
-            hostname=data.get("hostname"),
-            device=data.get("device"),
-            department_id=data.get("department_id"),
-            status=data.get("status", "assigned"),
-            description=data.get("description"),
-        )
-        db.add(obj)
+        # an active/reserved record collides with the registration
+        if dup.status != "deprecated":
+            raise ValueError("duplicate_assignment")
+        # a deprecated record is reused for the re-registration
+        dup.hostname = data.get("hostname")
+        dup.device = data.get("device")
+        dup.status = data.get("status", "assigned")
+        dup.department_id = data.get("department_id")
+        dup.description = data.get("description")
+        db.flush()
+        _audit(db, "ip_address", dup.id, "update", f"Re-registered IP {dup.address} in {subnet.name}", actor=actor)
+        db.commit()
+        db.refresh(dup)
+        return dup
+    obj = IPAddress(
+        subnet_id=subnet.id,
+        address=data["address"],
+        family=addr.version,
+        hostname=data.get("hostname"),
+        device=data.get("device"),
+        department_id=data.get("department_id"),
+        status=data.get("status", "assigned"),
+        description=data.get("description"),
+    )
+    db.add(obj)
     db.flush()
-    _audit(db, "ip_address", obj.id, "create", f"Registered {addr} in {subnet.cidr}")
+    _audit(db, "ip_address", obj.id, "create", f"Registered IP {obj.address} in {subnet.name}", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
@@ -573,14 +525,14 @@ def list_ip_addresses(
     page_size: int = 50,
     q: str | None = None,
     subnet_id: int | None = None,
-    status: str | None = None,
+    status_filter: str | None = None,
     family: int | None = None,
     department_id: int | None = None,
     device: str | None = None,
     sort: str = "created_at",
     order: str = "desc",
 ) -> dict[str, Any]:
-    stmt = select(IPAddress).join(Subnet, IPAddress.subnet_id == Subnet.id)
+    stmt = select(IPAddress).join(Subnet, IPAddress.subnet_id == Subnet.id).join(Network, Subnet.network_id == Network.id)
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(
@@ -589,78 +541,87 @@ def list_ip_addresses(
                 IPAddress.hostname.ilike(like),
                 IPAddress.device.ilike(like),
                 IPAddress.description.ilike(like),
-                Subnet.cidr.ilike(like),
-                Subnet.name.ilike(like),
             )
         )
     if subnet_id:
         stmt = stmt.where(IPAddress.subnet_id == subnet_id)
-    if status:
-        stmt = stmt.where(IPAddress.status == status)
+    if status_filter:
+        stmt = stmt.where(IPAddress.status == status_filter)
     if family:
-        stmt = stmt.where(IPAddress.family == family)
+        stmt = stmt.where(Network.family == family)
     if department_id:
         stmt = stmt.where(IPAddress.department_id == department_id)
     if device:
-        stmt = stmt.where(IPAddress.device.ilike(f"%{device}%"))
+        stmt = stmt.where(IPAddress.device.ilike(f"%{device.strip()}%"))
     sort_col = {
         "address": IPAddress.address,
         "hostname": IPAddress.hostname,
-        "status": IPAddress.status,
+        "device": IPAddress.device,
         "created_at": IPAddress.created_at,
         "updated_at": IPAddress.updated_at,
+        "status": IPAddress.status,
     }.get(sort, IPAddress.created_at)
-    stmt = stmt.order_by(sort_col.desc() if order.lower() == "desc" else sort_col.asc())
+    stmt = stmt.order_by(
+        sort_col.desc() if order.lower() == "desc" else sort_col.asc()
+    )
     rows = list(db.scalars(stmt).unique().all())
-    page_data = paginate(rows, page, page_size)
-    page_data["items"] = [
+    items = [
         {
             "id": r.id,
-            "subnet_id": r.subnet_id,
             "address": r.address,
-            "family": r.family,
             "hostname": r.hostname,
             "device": r.device,
+            "family": r.family,
             "department_id": r.department_id,
             "status": r.status,
             "description": r.description,
+            "subnet_id": r.subnet_id,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }
-        for r in page_data["items"]
+        for r in rows
     ]
-    return page_data
+    start = (page - 1) * page_size
+    total = len(items)
+    paged = items[start : start + page_size]
+    pages = max(1, -(-total // page_size))
+    return {"items": paged, "page": page, "page_size": page_size, "total": total, "pages": pages}
 
 
 def get_ip_address(db: Session, address_id: int) -> IPAddress:
     obj = db.get(IPAddress, address_id)
     if not obj:
-        raise not_found("IPAddress", address_id)
+        raise ValueError("not_found")
     return obj
 
 
-def update_ip_address(db: Session, address_id: int, data: dict[str, Any]) -> IPAddress:
+def update_ip_address(
+    db: Session, address_id: int, data: dict[str, Any], actor: str | None = None
+) -> IPAddress:
     obj = get_ip_address(db, address_id)
-    if "department_id" in data and data["department_id"] and not db.get(Department, data["department_id"]):
-        raise not_found("Department", data["department_id"])
-    for field in ("hostname", "device", "department_id", "status", "description"):
-        if field in data:
-            setattr(obj, field, data[field])
+    if "hostname" in data:
+        obj.hostname = data["hostname"]
+    if "device" in data:
+        obj.device = data["device"]
+    if "status" in data:
+        obj.status = data["status"]
+    if "department_id" in data:
+        obj.department_id = data["department_id"]
+    if "description" in data:
+        obj.description = data["description"]
     db.flush()
-    _audit(db, "ip_address", obj.id, "update", f"Updated address {obj.address}")
+    _audit(db, "ip_address", obj.id, "update", f"Updated IP {obj.address} ({obj.hostname or 'no hostname'})", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
 
 
-def delete_ip_address(db: Session, address_id: int) -> None:
+def delete_ip_address(db: Session, address_id: int, actor: str | None = None) -> None:
     obj = get_ip_address(db, address_id)
+    # an address still assigned to a device cannot be removed; deprecate first
     if obj.status == "assigned":
-        raise conflict(
-            "address_assigned",
-            f"Address {obj.address} is assigned; set it to another status before deleting",
-        )
-    _audit(db, "ip_address", obj.id, "delete", f"Deleted address {obj.address}")
+        raise ValueError("ip_assigned")
+    _audit(db, "ip_address", obj.id, "delete", f"Deleted IP {obj.address} ({obj.hostname or 'no hostname'})", actor=actor)
     db.delete(obj)
     db.commit()
 
@@ -669,10 +630,13 @@ def delete_ip_address(db: Session, address_id: int) -> None:
 # Departments
 # ---------------------------------------------------------------------------
 
-def create_department(db: Session, data: dict[str, Any]) -> Department:
-    dup = db.scalar(select(Department).where(func.lower(Department.name) == data["name"].strip().lower()))
+
+def create_department(db: Session, data: dict[str, Any], actor: str | None = None) -> Department:
+    dup = db.scalar(
+        select(Department).where(func.lower(Department.name) == data["name"].strip().lower())
+    )
     if dup:
-        raise conflict("duplicate_name", f"Department '{data['name']}' already exists")
+        raise ValueError("duplicate_name")
     obj = Department(
         name=data["name"].strip(),
         description=data.get("description"),
@@ -682,7 +646,7 @@ def create_department(db: Session, data: dict[str, Any]) -> Department:
     )
     db.add(obj)
     db.flush()
-    _audit(db, "department", obj.id, "create", f"Created department {obj.name}")
+    _audit(db, "department", obj.id, "create", f"Created department {obj.name}", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
@@ -694,8 +658,7 @@ def list_departments(db: Session, *, page: int, page_size: int, q: str | None) -
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(Department.name.ilike(like), Department.site.ilike(like)))
     rows = list(db.scalars(stmt.order_by(Department.name)).all())
-    page_data = paginate(rows, page, page_size)
-    page_data["items"] = [
+    items = [
         {
             "id": r.id,
             "name": r.name,
@@ -706,33 +669,46 @@ def list_departments(db: Session, *, page: int, page_size: int, q: str | None) -
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }
-        for r in page_data["items"]
+        for r in rows
     ]
-    return page_data
+    start = (page - 1) * page_size
+    total = len(items)
+    paged = items[start : start + page_size]
+    pages = max(1, -(-total // page_size))
+    return {"items": paged, "page": page, "page_size": page_size, "total": total, "pages": pages}
 
 
 def get_department(db: Session, department_id: int) -> Department:
     obj = db.get(Department, department_id)
     if not obj:
-        raise not_found("Department", department_id)
+        raise ValueError("not_found")
     return obj
 
 
-def update_department(db: Session, department_id: int, data: dict[str, Any]) -> Department:
+def update_department(
+    db: Session, department_id: int, data: dict[str, Any], actor: str | None = None
+) -> Department:
     obj = get_department(db, department_id)
-    for field in ("name", "description", "default_host_requirement", "vlan_id", "site"):
-        if field in data and data[field] is not None:
-            setattr(obj, field, data[field].strip() if field == "name" else data[field])
+    if "name" in data and data["name"]:
+        obj.name = data["name"].strip()
+    if "description" in data:
+        obj.description = data["description"]
+    if "default_host_requirement" in data:
+        obj.default_host_requirement = data["default_host_requirement"]
+    if "vlan_id" in data:
+        obj.vlan_id = data["vlan_id"]
+    if "site" in data:
+        obj.site = data["site"]
     db.flush()
-    _audit(db, "department", obj.id, "update", f"Updated department {obj.name}")
+    _audit(db, "department", obj.id, "update", f"Updated department {obj.name}", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
 
 
-def delete_department(db: Session, department_id: int) -> None:
+def delete_department(db: Session, department_id: int, actor: str | None = None) -> None:
     obj = get_department(db, department_id)
-    _audit(db, "department", obj.id, "delete", f"Deleted department {obj.name}")
+    _audit(db, "department", obj.id, "delete", f"Deleted department {obj.name}", actor=actor)
     db.delete(obj)
     db.commit()
 
@@ -741,63 +717,69 @@ def delete_department(db: Session, department_id: int) -> None:
 # Allocation plans
 # ---------------------------------------------------------------------------
 
+
 def _run_plan(base_network: str, depts: list[VLSMDepartment], policy_in: AllocationPolicyInput) -> dict[str, Any]:
     policy = _policy_from_input(policy_in)
     try:
-        result = allocate(base_network, requirements_from_schemas(depts), policy)
+        from app.services.vlsm_allocator import VLSMError
+
+        result = allocate(base_network, depts, policy)
     except VLSMError as exc:
         raise _vlsm_error_to_app_error(exc) from exc
-    result["algorithm_version"] = settings.algorithm_version
+    result["algorithm_version"] = get_settings().algorithm_version
     return result
 
 
-def create_plan(db: Session, data: dict[str, Any]) -> AllocationPlan:
-    result = _run_plan(data["base_network"], data["departments"], data.get("policy"))
-    policy_in = data.get("policy")
-    if isinstance(policy_in, AllocationPolicyInput):
-        policy_dump = policy_in.model_dump(mode="json")
-    else:
-        policy_dump = AllocationPolicyInput(**(policy_in or {})).model_dump(mode="json")
+def create_plan(
+    db: Session, data: dict[str, Any], actor: str | None = None
+) -> AllocationPlan:
+    result = _run_plan(data["base_network"], [VLSMDepartment(**d) for d in data["departments"]], _policy_from_input(data.get("policy")))
+    policy_dump = _policy_from_input(data.get("policy")).model_dump(mode="json")
     inputs = {
         "base_network": result["base_network"],
         "family": result["family"],
         "policy": policy_dump,
-        "departments": [
-            (d if isinstance(d, VLSMDepartment) else VLSMDepartment(**d)).model_dump(mode="json")
-            for d in data["departments"]
-        ],
+        "departments": [VLSMDepartment(**d).model_dump(mode="json") for d in data["departments"]],
     }
-    dup = db.scalar(select(AllocationPlan).where(func.lower(AllocationPlan.name) == data["name"].strip().lower()))
+    dup = db.scalar(
+        select(AllocationPlan).where(func.lower(AllocationPlan.name) == data["name"].strip().lower())
+    )
     if dup:
-        raise conflict("duplicate_name", f"An allocation plan named '{data['name']}' already exists")
+        raise ValueError("duplicate_name")
     obj = AllocationPlan(
         name=data["name"].strip(),
         base_network=result["base_network"],
         family=result["family"],
         inputs=inputs,
-        algorithm_version=settings.algorithm_version,
+        algorithm_version=result["algorithm_version"],
         results=result,
         status="draft",
         notes=data.get("notes"),
     )
     db.add(obj)
     db.flush()
-    _audit(db, "allocation_plan", obj.id, "create", f"Saved plan '{obj.name}' for {obj.base_network}")
+    _audit(db, "allocation_plan", obj.id, "create", f"Saved plan '{obj.name}' for {obj.base_network}", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
 
 
-def list_plans(db: Session, *, page: int, page_size: int, status: str | None, q: str | None) -> dict[str, Any]:
+def list_plans(
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    status_filter: str | None,
+    q: str | None,
+) -> dict[str, Any]:
     stmt = select(AllocationPlan)
-    if status:
-        stmt = stmt.where(AllocationPlan.status == status)
+    if status_filter:
+        stmt = stmt.where(AllocationPlan.status == status_filter)
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(or_(AllocationPlan.name.ilike(like), AllocationPlan.base_network.ilike(like)))
     rows = list(db.scalars(stmt.order_by(AllocationPlan.created_at.desc())).all())
-    page_data = paginate(rows, page, page_size)
-    page_data["items"] = [
+    items = [
         {
             "id": r.id,
             "name": r.name,
@@ -811,32 +793,41 @@ def list_plans(db: Session, *, page: int, page_size: int, status: str | None, q:
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }
-        for r in page_data["items"]
+        for r in rows
     ]
-    return page_data
+    return {"items": items, "page": page, "page_size": page_size, "total": len(items)}
 
 
 def get_plan(db: Session, plan_id: int) -> AllocationPlan:
     obj = db.get(AllocationPlan, plan_id)
     if not obj:
-        raise not_found("AllocationPlan", plan_id)
+        raise ValueError("not_found")
     return obj
 
 
-def update_plan(db: Session, plan_id: int, data: dict[str, Any]) -> AllocationPlan:
+def update_plan(
+    db: Session, plan_id: int, data: dict[str, Any], actor: str | None = None
+) -> AllocationPlan:
     obj = get_plan(db, plan_id)
-    for field in ("name", "notes"):
-        if field in data and data[field] is not None:
-            setattr(obj, field, data[field].strip() if field == "name" else data[field])
+    if "name" in data and data["name"]:
+        dup = db.scalar(
+            select(AllocationPlan).where(
+                and_(AllocationPlan.id != plan_id, func.lower(AllocationPlan.name) == data["name"].strip().lower())
+            )
+        )
+        if dup:
+            raise ValueError("duplicate_name")
+        obj.name = data["name"].strip()
+    if "notes" in data:
+        obj.notes = data["notes"]
     db.flush()
-    _audit(db, "allocation_plan", obj.id, "update", f"Updated plan '{obj.name}'")
+    _audit(db, "allocation_plan", obj.id, "update", f"Updated plan '{obj.name}'", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
 
 
-def recalculate_plan(db: Session, plan_id: int) -> AllocationPlan:
-    """Recalculate from stored inputs. Never commits an active allocation."""
+def recalculate_plan(db: Session, plan_id: int, actor: str | None = None) -> AllocationPlan:
     obj = get_plan(db, plan_id)
     inputs = obj.inputs
     result = _run_plan(
@@ -845,34 +836,24 @@ def recalculate_plan(db: Session, plan_id: int) -> AllocationPlan:
         AllocationPolicyInput(**inputs.get("policy", {})),
     )
     obj.results = result
-    obj.algorithm_version = settings.algorithm_version
+    obj.algorithm_version = result["algorithm_version"]
     db.flush()
-    _audit(db, "allocation_plan", obj.id, "recalculate", f"Recalculated plan '{obj.name}'")
+    _audit(db, "allocation_plan", obj.id, "recalculate", f"Recalculated plan '{obj.name}'", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
 
 
-def activate_plan(db: Session, plan_id: int) -> dict[str, Any]:
-    """Validate and commit a plan transactionally.
-
-    Revalidates every allocation against the *current* database state inside a
-    transaction: overlap, containment and duplicate names are re-checked so a
-    plan that became stale (e.g. a subnet was created after preview) is rejected
-    rather than silently committed.
-    """
+def activate_plan(db: Session, plan_id: int, actor: str | None = None) -> dict[str, Any]:
     obj = get_plan(db, plan_id)
     if obj.status == "archived":
-        raise conflict("plan_archived", f"Plan '{obj.name}' is archived and cannot be activated")
+        raise ValueError("plan_archived")
     if obj.status == "active":
-        raise conflict("plan_active", f"Plan '{obj.name}' is already active")
-
+        raise ValueError("plan_active")
     allocations = obj.results.get("allocations", [])
     if not allocations:
-        raise conflict("plan_empty", f"Plan '{obj.name}' has no allocations to activate")
-
+        raise ValueError("plan_empty")
     try:
-        # find-or-create the parent network inside the same transaction
         parent = db.scalar(select(Network).where(Network.cidr == obj.base_network))
         if parent is None:
             parent = Network(
@@ -885,25 +866,16 @@ def activate_plan(db: Session, plan_id: int) -> dict[str, Any]:
             )
             db.add(parent)
             db.flush()
-
         created = 0
         for alloc in allocations:
             net = _parse_cidr_or_422(alloc["network"], "cidr", family=obj.family)
             if not net.subnet_of(parse_network(parent.cidr)):
-                raise conflict("overlap", f"Allocation {net} is outside {parent.cidr}")
+                raise ValueError("overlap")
             for other in db.scalars(
-                select(Subnet).where(
-                    Subnet.network_id == parent.id,
-                    Subnet.status.in_(SUBNET_ACTIVE_STATES),
-                )
+                select(Subnet).where(Subnet.network_id == parent.id, Subnet.status.in_(SUBNET_ACTIVE_STATES))
             ):
                 if net.overlaps(parse_network(other.cidr)):
-                    raise conflict(
-                        "overlap",
-                        f"Plan allocation {net} ('{alloc['department']}') overlaps existing "
-                        f"subnet '{other.name}' ({other.cidr}); recalculate the plan",
-                        [{"subnet_id": other.id, "cidr": other.cidr}],
-                    )
+                    raise ValueError("overlap")
             sub = Subnet(
                 network_id=parent.id,
                 name=str(alloc["department"])[:200],
@@ -916,17 +888,19 @@ def activate_plan(db: Session, plan_id: int) -> dict[str, Any]:
             )
             db.add(sub)
             created += 1
-
         obj.status = "active"
         _audit(
-            db, "allocation_plan", obj.id, "activate",
+            db,
+            "allocation_plan",
+            obj.id,
+            "activate",
             f"Activated plan '{obj.name}': {created} subnet(s) committed to network '{parent.name}'",
+            actor=actor,
         )
         db.commit()
     except Exception:
         db.rollback()
         raise
-
     db.refresh(obj)
     return {
         "plan_id": obj.id,
@@ -937,13 +911,13 @@ def activate_plan(db: Session, plan_id: int) -> dict[str, Any]:
     }
 
 
-def archive_plan(db: Session, plan_id: int) -> AllocationPlan:
+def archive_plan(db: Session, plan_id: int, actor: str | None = None) -> AllocationPlan:
     obj = get_plan(db, plan_id)
     if obj.status == "archived":
-        raise conflict("plan_archived", f"Plan '{obj.name}' is already archived")
+        raise ValueError("plan_archived")
     obj.status = "archived"
     db.flush()
-    _audit(db, "allocation_plan", obj.id, "archive", f"Archived plan '{obj.name}'")
+    _audit(db, "allocation_plan", obj.id, "archive", f"Archived plan '{obj.name}'", actor=actor)
     db.commit()
     db.refresh(obj)
     return obj
@@ -953,12 +927,11 @@ def archive_plan(db: Session, plan_id: int) -> AllocationPlan:
 # Dashboard / audit
 # ---------------------------------------------------------------------------
 
+
 def network_utilization(db: Session, network: Network) -> dict[str, Any]:
     parent_net = parse_network(network.cidr)
     active = [s for s in network.subnets if s.status in SUBNET_ACTIVE_STATES]
-    allocated = 0
-    for s in active:
-        allocated += parse_network(s.cidr).num_addresses
+    allocated = sum(parse_network(s.cidr).num_addresses for s in active)
     total = parent_net.num_addresses
     return {
         "network_id": network.id,
@@ -972,14 +945,13 @@ def network_utilization(db: Session, network: Network) -> dict[str, Any]:
 
 
 def detect_conflicts(db: Session) -> list[dict[str, Any]]:
-    """Detect overlapping active subnets across the whole inventory."""
     conflicts: list[dict[str, Any]] = []
     networks = list(db.scalars(select(Network)).all())
     for network in networks:
         active = [s for s in network.subnets if s.status in SUBNET_ACTIVE_STATES]
         for i, a in enumerate(active):
             net_a = parse_network(a.cidr)
-            for b in active[i + 1 :]:
+            for b in active[i + 1:]:
                 if net_a.overlaps(parse_network(b.cidr)):
                     conflicts.append(
                         {
@@ -997,7 +969,6 @@ def dashboard_summary(db: Session) -> dict[str, Any]:
     subnets = list(db.scalars(select(Subnet)).all())
     ips = list(db.scalars(select(IPAddress)).all())
     plans = list(db.scalars(select(AllocationPlan)).all())
-
     utilizations = [network_utilization(db, n) for n in networks]
     avg_util = (
         round(sum(u["utilization_percent"] for u in utilizations) / len(utilizations), 2)
@@ -1007,10 +978,7 @@ def dashboard_summary(db: Session) -> dict[str, Any]:
     ip_counts = {"available": 0, "reserved": 0, "assigned": 0, "deprecated": 0}
     for ip in ips:
         ip_counts[ip.status] = ip_counts.get(ip.status, 0) + 1
-
-    recent = list(
-        db.scalars(select(AuditEvent).order_by(AuditEvent.timestamp.desc()).limit(10)).all()
-    )
+    recent = list(db.scalars(select(AuditEvent).order_by(AuditEvent.timestamp.desc()).limit(10)).all())
     return {
         "total_networks": len(networks),
         "total_subnets": len([s for s in subnets if s.status in SUBNET_ACTIVE_STATES]),
@@ -1040,7 +1008,12 @@ def dashboard_summary(db: Session) -> dict[str, Any]:
 
 
 def list_audit_events(
-    db: Session, *, page: int, page_size: int, resource_type: str | None, action: str | None
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    resource_type: str | None,
+    action: str | None,
 ) -> dict[str, Any]:
     stmt = select(AuditEvent)
     if resource_type:
@@ -1048,8 +1021,7 @@ def list_audit_events(
     if action:
         stmt = stmt.where(AuditEvent.action == action)
     rows = list(db.scalars(stmt.order_by(AuditEvent.timestamp.desc())).all())
-    page_data = paginate(rows, page, page_size)
-    page_data["items"] = [
+    items = [
         {
             "id": r.id,
             "resource_type": r.resource_type,
@@ -1059,42 +1031,11 @@ def list_audit_events(
             "actor": r.actor,
             "summary": r.summary,
         }
-        for r in page_data["items"]
+        for r in rows
     ]
-    return page_data
-
-
-__all__ = [
-    "activate_plan",
-    "archive_plan",
-    "create_department",
-    "create_ip_address",
-    "create_network",
-    "create_plan",
-    "create_subnet",
-    "dashboard_summary",
-    "delete_department",
-    "delete_ip_address",
-    "delete_network",
-    "delete_subnet",
-    "detect_conflicts",
-    "get_department",
-    "get_ip_address",
-    "get_network",
-    "get_plan",
-    "get_subnet",
-    "list_audit_events",
-    "list_departments",
-    "list_ip_addresses",
-    "list_networks",
-    "list_plans",
-    "list_subnets",
-    "network_detail",
-    "recalculate_plan",
-    "update_department",
-    "update_ip_address",
-    "update_network",
-    "update_plan",
-    "update_subnet",
-    "usable_capacity",
-]
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": len(rows),
+    }

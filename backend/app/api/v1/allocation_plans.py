@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_operator
 from app.db.session import get_db
 from app.schemas.inventory import (
     PlanActivateResponse,
@@ -25,12 +26,16 @@ def list_plans(
     status_filter: str | None = Query(None, alias="status"),
     q: str | None = Query(None),
 ) -> dict:
-    return ipam_service.list_plans(db, page=page, page_size=page_size, status=status_filter, q=q)
+    return ipam_service.list_plans(db, page=page, page_size=page_size, status_filter=status_filter, q=q)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Save an allocation plan")
-def create_plan(payload: PlanCreate, db: Session = Depends(get_db)) -> PlanRead:
-    return ipam_service.create_plan(db, payload.model_dump())
+def create_plan(
+    payload: PlanCreate,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> PlanRead:
+    return ipam_service.create_plan(db, payload.model_dump(), actor=getattr(actor, "username", None))
 
 
 @router.get("/{plan_id}", summary="Get a saved plan")
@@ -39,8 +44,15 @@ def get_plan(plan_id: int, db: Session = Depends(get_db)) -> PlanRead:
 
 
 @router.patch("/{plan_id}", summary="Update plan metadata")
-def update_plan(plan_id: int, payload: PlanUpdate, db: Session = Depends(get_db)) -> PlanRead:
-    return ipam_service.update_plan(db, plan_id, payload.model_dump(exclude_unset=True))
+def update_plan(
+    plan_id: int,
+    payload: PlanUpdate,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> PlanRead:
+    return ipam_service.update_plan(
+        db, plan_id, payload.model_dump(exclude_unset=True), actor=getattr(actor, "username", None)
+    )
 
 
 @router.post(
@@ -48,17 +60,29 @@ def update_plan(plan_id: int, payload: PlanUpdate, db: Session = Depends(get_db)
     response_model=PlanActivateResponse,
     summary="Validate and commit a plan transactionally",
 )
-def activate_plan(plan_id: int, db: Session = Depends(get_db)) -> PlanActivateResponse:
-    return ipam_service.activate_plan(db, plan_id)
+def activate_plan(
+    plan_id: int,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> PlanActivateResponse:
+    return ipam_service.activate_plan(db, plan_id, actor=getattr(actor, "username", None))
 
 
 @router.post(
     "/{plan_id}/recalculate", summary="Recalculate a plan from its stored inputs"
 )
-def recalculate_plan(plan_id: int, db: Session = Depends(get_db)) -> PlanRead:
-    return ipam_service.recalculate_plan(db, plan_id)
+def recalculate_plan(
+    plan_id: int,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> PlanRead:
+    return ipam_service.recalculate_plan(db, plan_id, actor=getattr(actor, "username", None))
 
 
 @router.post("/{plan_id}/archive", summary="Archive an eligible plan")
-def archive_plan(plan_id: int, db: Session = Depends(get_db)) -> PlanRead:
-    return ipam_service.archive_plan(db, plan_id)
+def archive_plan(
+    plan_id: int,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> PlanRead:
+    return ipam_service.archive_plan(db, plan_id, actor=getattr(actor, "username", None))

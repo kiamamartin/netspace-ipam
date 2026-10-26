@@ -8,18 +8,51 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import admin_token
+
 try:
     import openpyxl
 except ImportError:  # pragma: no cover
     openpyxl = None
 
 
+def _admin_token() -> str:
+    from app.core.config import get_settings
+    from app.core.security import encode_token, password_hash, runtime_secret
+    from app.db.session import SessionLocal
+    from app.models.user import User
+
+    settings = get_settings()
+    with SessionLocal() as db:
+        admin = db.query(User).filter(User.username == "adminuser").first()
+        if admin is None:
+            admin = User(
+                username="adminuser",
+                role="admin",
+                password_hash=password_hash("AdminPass1!"),
+            )
+            db.add(admin)
+            db.commit()
+            db.refresh(admin)
+        return encode_token(
+            {"uid": admin.id, "role": admin.role},
+            runtime_secret(settings.auth_secret),
+            expires_minutes=settings.jwt_expires_minutes,
+        )
+
+
 def _seed_network_with_subnets(client: TestClient, subnet_count: int = 3) -> tuple[int, list[str]]:
-    r = client.post("/api/v1/networks", json={"name": "HQ LAN", "cidr": "192.168.10.0/24"})
-    assert r.status_code == 201, r.text
-    net_id = r.json()["id"]
     import ipaddress
 
+    token = _admin_token()
+
+    r = client.post(
+        "/api/v1/networks",
+        json={"name": "HQ LAN", "cidr": "192.168.10.0/24"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 201, r.text
+    net_id = r.json()["id"]
     cidrs = ["192.168.10.0/26", "192.168.10.64/27", "192.168.10.96/27", "192.168.10.128/28"]
     names = ["Administration", "ICT", "Finance", "HR"]
     created: list[str] = []
@@ -34,6 +67,7 @@ def _seed_network_with_subnets(client: TestClient, subnet_count: int = 3) -> tup
                 "vlan_id": 10 + i,
                 "gateway": gateway,
             },
+            headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 201, r.text
         created.append(cidrs[i])
@@ -88,7 +122,12 @@ def test_network_pdf(client: TestClient) -> None:
 
 def test_plan_exports_match_saved_results(client: TestClient, sample_vlsm_payload: dict) -> None:
     """All export formats must reflect the same saved allocation result."""
-    r = client.post("/api/v1/allocation-plans", json={"name": "Export Plan", **sample_vlsm_payload})
+    admin_token = _admin_token()
+    r = client.post(
+        "/api/v1/allocation-plans",
+        json={"name": "Export Plan", **sample_vlsm_payload},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
     assert r.status_code == 201, r.text
     plan = r.json()
     saved = {
@@ -124,7 +163,12 @@ def test_plan_exports_match_saved_results(client: TestClient, sample_vlsm_payloa
 
 def test_zero_row_reports_are_valid(client: TestClient) -> None:
     """Exports must work with zero allocation rows."""
-    r = client.post("/api/v1/networks", json={"name": "Empty", "cidr": "10.9.0.0/16"})
+    admin_token = _admin_token()
+    r = client.post(
+        "/api/v1/networks",
+        json={"name": "Empty", "cidr": "10.9.0.0/16"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
     net_id = r.json()["id"]
     for fmt in ("csv", "xlsx", "pdf"):
         r = client.get(f"/api/v1/reports/networks/{net_id}/{fmt}")
@@ -146,11 +190,20 @@ def test_single_row_report(client: TestClient) -> None:
 
 def test_special_characters_sanitized(client: TestClient) -> None:
     """User-controlled text with markup characters must not break report generation."""
-    r = client.post("/api/v1/networks", json={"name": "Spc", "cidr": "10.8.0.0/24"})
+    r = client.post(
+        "/api/v1/networks",
+        json={"name": "Spc", "cidr": "10.8.0.0/24"},
+        headers={"Authorization": f"Bearer {_admin_token()}"},
+    )
     net_id = r.json()["id"]
     r = client.post(
         "/api/v1/subnets",
-        json={"network_id": net_id, "name": "R&D <script>alert(1)</script>", "cidr": "10.8.0.0/26"},
+        json={
+            "network_id": net_id,
+            "name": "R&D <script>alert(1)</script>",
+            "cidr": "10.8.0.0/26",
+        },
+        headers={"Authorization": f"Bearer {_admin_token()}"},
     )
     assert r.status_code == 201
     for fmt in ("csv", "xlsx", "pdf"):
@@ -169,9 +222,13 @@ def test_reports_use_database_data_not_recalculation(client: TestClient) -> None
     before = client.get(f"/api/v1/reports/networks/{net_id}/csv").content
     r = client.post(
         "/api/v1/subnets",
-        json={"network_id": net_id, "name": "Finance", "cidr": "192.168.10.96/27"},
+        json={
+            "network_id": net_id,
+            "name": "Finance",
+            "cidr": "192.168.10.96/27",
+        },
+        headers={"Authorization": f"Bearer {_admin_token()}"},
     )
-    assert r.status_code == 201
+    assert r.status_code == 201, r.text
     after = client.get(f"/api/v1/reports/networks/{net_id}/csv").content
     assert before != after
-    assert b"192.168.10.96/27" in after

@@ -1,15 +1,28 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import {
-  api,
-  errorMessage,
-  type Environment,
+import { getUser } from '../auth'
+import { api, errorMessage, type Environment,
   type Network,
   type NetworkDetail,
   type Paginated,
   type Subnet,
 } from '../api'
-import { Badge, ErrorBanner, ExportButtons, PageHead, Pagination, SuccessBanner } from '../ui'
+import {
+  Badge,
+  CopyValue,
+  ErrorBanner,
+  ExportButtons,
+  Icon,
+  Loading,
+  Modal,
+  NumberField,
+  PageHead,
+  PaginationBar,
+  RowMenu,
+  SelectField,
+  TextField,
+} from '../ui'
+import { confirmAction, notify } from '../feedback'
 import { kv } from '../kv'
 
 const ENVIRONMENTS: Environment[] = ['production', 'staging', 'development', 'lab']
@@ -19,11 +32,13 @@ const ENVIRONMENTS: Environment[] = ['production', 'staging', 'development', 'la
 /* ------------------------------------------------------------------ */
 function NetworkList() {
   const navigate = useNavigate()
+  const user = getUser()
   const [data, setData] = useState<Paginated<Network> | null>(null)
   const [page, setPage] = useState(1)
   const [q, setQ] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState({
     name: '',
     cidr: '',
@@ -48,6 +63,7 @@ function NetworkList() {
   async function create(e: FormEvent) {
     e.preventDefault()
     setError(null)
+    setSubmitting(true)
     try {
       const net = await api.post<Network>('/api/v1/networks', {
         name: form.name.trim(),
@@ -56,9 +72,54 @@ function NetworkList() {
         site: form.site.trim() || null,
         description: form.description.trim() || null,
       })
+      notify.success('Network created', `${net.name} (${net.cidr})`)
+      setShowForm(false)
+      setForm({ name: '', cidr: '', environment: 'production', site: '', description: '' })
       navigate(`/networks/${net.id}`)
     } catch (err) {
       setError(errorMessage(err))
+      notify.error('Could not create network', errorMessage(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function setSubnetStatus(subnet: Subnet, status: string) {
+    setError(null)
+    if (user?.role === 'viewer') {
+      notify.error('Cannot change subnet status in viewer role')
+      return
+    }
+    try {
+      await api.patch(`/api/v1/subnets/${subnet.id}`, { status })
+      notify.success('Status updated', `${subnet.name} is now ${status}.`)
+      load()
+    } catch (err) {
+      setError(errorMessage(err))
+    }
+  }
+
+  async function removeSubnet(subnet: Subnet) {
+    // viewers cannot delete subnets
+    if (user?.role === 'viewer') {
+      notify.error('Subnets cannot be deleted in viewer role')
+      return
+    }
+    setError(null)
+    const ok = await confirmAction({
+      title: `Delete subnet ${subnet.name}?`,
+      description: `${subnet.cidr} and its tracked addresses will be removed from the inventory.`,
+      confirmLabel: 'Delete subnet',
+    })
+    if (!ok) return
+    setError(null)
+    try {
+      await api.delete(`/api/v1/subnets/${subnet.id}`)
+      notify.success('Subnet deleted', subnet.name)
+      load()
+    } catch (err) {
+      setError(errorMessage(err))
+      notify.error('Could not delete subnet', errorMessage(err))
     }
   }
 
@@ -68,68 +129,68 @@ function NetworkList() {
         title="Networks"
         sub="Parent address blocks and their allocation state"
         actions={
-          <button className="btn" onClick={() => setShowForm((s) => !s)}>
-            {showForm ? 'Close' : '+ New network'}
-          </button>
+          user?.role !== 'viewer' ? (
+            <button className="btn" onClick={() => setShowForm(true)}>
+              <Icon name="plus" size={13} /> New network
+            </button>
+          ) : null
         }
       />
       <ErrorBanner message={error} />
 
-      {showForm && (
-        <div className="card">
-          <form className="form-grid" onSubmit={create}>
-            <label className="field">
-              Name *
-              <input
-                required
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="HQ LAN"
-              />
-            </label>
-            <label className="field">
-              CIDR *
-              <input
-                required
-                value={form.cidr}
-                onChange={(e) => setForm({ ...form, cidr: e.target.value })}
-                placeholder="192.168.10.0/24"
-              />
-            </label>
-            <label className="field">
-              Environment
-              <select
-                value={form.environment}
-                onChange={(e) => setForm({ ...form, environment: e.target.value as Environment })}
-              >
-                {ENVIRONMENTS.map((env) => (
-                  <option key={env}>{env}</option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              Site
-              <input
-                value={form.site}
-                onChange={(e) => setForm({ ...form, site: e.target.value })}
-                placeholder="HQ"
-              />
-            </label>
-            <label className="field" style={{ gridColumn: '1 / -1' }}>
-              Description
-              <input
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-              />
-            </label>
-            <div className="form-actions">
-              <button className="btn" type="submit">
-                Create network
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      <Modal
+        open={showForm && user?.role !== 'viewer'}
+        onOpenChange={setShowForm}
+        title="New network"
+        description="Register a parent address block in the inventory."
+        wide
+        footer={
+          <>
+            <button className="btn subtle" type="button" onClick={() => setShowForm(false)}>
+              Cancel
+            </button>
+            <button className="btn" type="submit" form="create-network-form" disabled={submitting || user?.role === 'viewer'}>
+              {submitting ? 'Creating…' : 'Create network'}
+            </button>
+          </>
+        }
+      >
+        <form id="create-network-form" className="form-grid" onSubmit={create}>
+          <TextField
+            label="Name"
+            required
+            value={form.name}
+            onChange={(v) => setForm({ ...form, name: v })}
+            placeholder="HQ LAN"
+          />
+          <TextField
+            label="CIDR"
+            required
+            value={form.cidr}
+            onChange={(v) => setForm({ ...form, cidr: v })}
+            placeholder="192.168.10.0/24"
+            mono
+          />
+          <SelectField
+            label="Environment"
+            value={form.environment}
+            onChange={(v) => setForm({ ...form, environment: v as Environment })}
+            options={ENVIRONMENTS.map((env) => ({ value: env, label: env }))}
+          />
+          <TextField
+            label="Site"
+            value={form.site}
+            onChange={(v) => setForm({ ...form, site: v })}
+            placeholder="HQ"
+          />
+          <TextField
+            label="Description"
+            span
+            value={form.description}
+            onChange={(v) => setForm({ ...form, description: v })}
+          />
+        </form>
+      </Modal>
 
       <div className="card">
         <div className="inline no-print" style={{ marginBottom: 12 }}>
@@ -164,7 +225,9 @@ function NetworkList() {
                     <td>
                       <Link to={`/networks/${n.id}`}>{n.name}</Link>
                     </td>
-                    <td className="mono">{n.cidr}</td>
+                    <td>
+                      <CopyValue value={n.cidr} />
+                    </td>
                     <td className="num">IPv{n.family}</td>
                     <td>{n.environment}</td>
                     <td>{n.site ?? '—'}</td>
@@ -178,7 +241,7 @@ function NetworkList() {
           </div>
         )}
         {data && (
-          <Pagination page={data.page} pages={data.pages} total={data.total} onChange={setPage} />
+          <PaginationBar page={data.page} pages={data.pages} total={data.total} onChange={setPage} />
         )}
       </div>
     </>
@@ -192,10 +255,11 @@ const SUBNET_STATUSES = ['allocated', 'reserved', 'released'] as const
 
 function NetworkDetailView() {
   const { networkId } = useParams()
+  const user = getUser()
   const [net, setNet] = useState<NetworkDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
   const [showSubnetForm, setShowSubnetForm] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [subnetForm, setSubnetForm] = useState({
     name: '',
     cidr: '',
@@ -218,7 +282,7 @@ function NetworkDetailView() {
   async function createSubnet(e: FormEvent) {
     e.preventDefault()
     setError(null)
-    setSuccess(null)
+    setSubmitting(true)
     try {
       await api.post('/api/v1/subnets', {
         network_id: Number(networkId),
@@ -228,12 +292,15 @@ function NetworkDetailView() {
         gateway: subnetForm.gateway.trim() || null,
         description: subnetForm.description.trim() || null,
       })
-      setSuccess('Subnet allocated.')
+      notify.success('Subnet allocated', `${subnetForm.name} (${subnetForm.cidr})`)
       setSubnetForm({ name: '', cidr: '', vlan_id: '', gateway: '', description: '' })
       setShowSubnetForm(false)
       load()
     } catch (err) {
       setError(errorMessage(err))
+      notify.error('Could not allocate subnet', errorMessage(err))
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -241,6 +308,7 @@ function NetworkDetailView() {
     setError(null)
     try {
       await api.patch(`/api/v1/subnets/${subnet.id}`, { status })
+      notify.success('Status updated', `${subnet.name} is now ${status}.`)
       load()
     } catch (err) {
       setError(errorMessage(err))
@@ -248,17 +316,24 @@ function NetworkDetailView() {
   }
 
   async function removeSubnet(subnet: Subnet) {
-    if (!window.confirm(`Delete subnet ${subnet.name} (${subnet.cidr})?`)) return
+    const ok = await confirmAction({
+      title: `Delete subnet ${subnet.name}?`,
+      description: `${subnet.cidr} and its tracked addresses will be removed from the inventory.`,
+      confirmLabel: 'Delete subnet',
+    })
+    if (!ok) return
     setError(null)
     try {
       await api.delete(`/api/v1/subnets/${subnet.id}`)
+      notify.success('Subnet deleted', subnet.name)
       load()
     } catch (err) {
       setError(errorMessage(err))
+      notify.error('Could not delete subnet', errorMessage(err))
     }
   }
 
-  if (!net) return <ErrorBanner message={error ?? 'Loading network…'} />
+  if (!net) return <Loading label="Loading network…" />
 
   const detailEntries = Object.entries(net.details).filter(
     ([, v]) => v !== null && v !== undefined && typeof v !== 'object',
@@ -277,7 +352,6 @@ function NetworkDetailView() {
         }
       />
       <ErrorBanner message={error} />
-      <SuccessBanner message={success} />
 
       <div className="grid cols-2">
         <div className="card">
@@ -308,61 +382,68 @@ function NetworkDetailView() {
       <div className="card">
         <div className="page-head" style={{ marginBottom: 10 }}>
           <h2 style={{ margin: 0 }}>Subnets ({net.subnets.length})</h2>
-          <button className="btn small no-print" onClick={() => setShowSubnetForm((s) => !s)}>
-            {showSubnetForm ? 'Close' : '+ Allocate subnet'}
-          </button>
+          {user?.role !== 'viewer' ? (
+            <button className="btn small no-print" onClick={() => setShowSubnetForm(true)}>
+              <Icon name="plus" size={13} /> Allocate subnet
+            </button>
+          ) : null}
         </div>
 
-        {showSubnetForm && (
-          <form className="form-grid no-print" onSubmit={createSubnet} style={{ marginBottom: 14 }}>
-            <label className="field">
-              Name *
-              <input
-                required
-                value={subnetForm.name}
-                onChange={(e) => setSubnetForm({ ...subnetForm, name: e.target.value })}
-              />
-            </label>
-            <label className="field">
-              CIDR *
-              <input
-                required
-                value={subnetForm.cidr}
-                onChange={(e) => setSubnetForm({ ...subnetForm, cidr: e.target.value })}
-                placeholder="192.168.10.0/26"
-              />
-            </label>
-            <label className="field">
-              VLAN
-              <input
-                type="number"
-                min={1}
-                max={4094}
-                value={subnetForm.vlan_id}
-                onChange={(e) => setSubnetForm({ ...subnetForm, vlan_id: e.target.value })}
-              />
-            </label>
-            <label className="field">
-              Gateway
-              <input
-                value={subnetForm.gateway}
-                onChange={(e) => setSubnetForm({ ...subnetForm, gateway: e.target.value })}
-              />
-            </label>
-            <label className="field" style={{ gridColumn: '1 / -1' }}>
-              Description
-              <input
-                value={subnetForm.description}
-                onChange={(e) => setSubnetForm({ ...subnetForm, description: e.target.value })}
-              />
-            </label>
-            <div className="form-actions">
-              <button className="btn" type="submit">
-                Allocate
-              </button>
-            </div>
+      <Modal
+        open={showSubnetForm && user?.role !== 'viewer'}
+        onOpenChange={setShowSubnetForm}
+        title="Allocate subnet"
+          description={`Carve a subnet out of ${net.cidr}.`}
+          wide
+        footer={
+          <>
+            <button className="btn subtle" type="button" onClick={() => setShowSubnetForm(false)}>
+              Cancel
+            </button>
+            <button className="btn" type="submit" form="create-subnet-form" disabled={submitting || user?.role === 'viewer'}>
+              {submitting ? 'Allocating…' : 'Allocate'}
+            </button>
+          </>
+        }
+        >
+          <form id="create-subnet-form" className="form-grid" onSubmit={createSubnet}>
+            <TextField
+              label="Name"
+              required
+              value={subnetForm.name}
+              onChange={(v) => setSubnetForm({ ...subnetForm, name: v })}
+              placeholder="Staff LAN"
+            />
+            <TextField
+              label="CIDR"
+              required
+              value={subnetForm.cidr}
+              onChange={(v) => setSubnetForm({ ...subnetForm, cidr: v })}
+              placeholder="192.168.10.0/26"
+              mono
+            />
+            <NumberField
+              value={subnetForm.vlan_id === '' ? '' : Number(subnetForm.vlan_id)}
+              onChange={(v) => setSubnetForm({ ...subnetForm, vlan_id: String(v) })}
+              min={1}
+              max={4094}
+              placeholder="VLAN id"
+            />
+            <TextField
+              label="Gateway"
+              value={subnetForm.gateway}
+              onChange={(v) => setSubnetForm({ ...subnetForm, gateway: v })}
+              placeholder="192.168.10.1"
+              mono
+            />
+            <TextField
+              label="Description"
+              span
+              value={subnetForm.description}
+              onChange={(v) => setSubnetForm({ ...subnetForm, description: v })}
+            />
           </form>
-        )}
+        </Modal>
 
         {net.subnets.length === 0 ? (
           <div className="empty">No subnets yet.</div>
@@ -384,7 +465,9 @@ function NetworkDetailView() {
                 {net.subnets.map((s) => (
                   <tr key={s.id}>
                     <td>{s.name}</td>
-                    <td className="mono">{s.cidr}</td>
+                    <td>
+                      <CopyValue value={s.cidr} />
+                    </td>
                     <td className="num">{s.vlan_id ?? '—'}</td>
                     <td className="mono">{s.gateway ?? '—'}</td>
                     <td className="num">{s.ip_address_count}</td>
@@ -392,19 +475,17 @@ function NetworkDetailView() {
                       <Badge status={s.status} />
                     </td>
                     <td className="no-print">
-                      <select
-                        value={s.status}
-                        onChange={(e) => setSubnetStatus(s, e.target.value)}
-                        style={{ width: 110 }}
-                        title="Change status"
-                      >
-                        {SUBNET_STATUSES.map((st) => (
-                          <option key={st}>{st}</option>
-                        ))}
-                      </select>{' '}
-                      <button className="btn subtle small" onClick={() => removeSubnet(s)}>
-                        Delete
-                      </button>
+                      <RowMenu
+                        label={`Actions for ${s.name}`}
+                        actions={[
+                          ...SUBNET_STATUSES.filter((st) => st !== s.status).map((st) => ({
+                            label: `Mark ${st}`,
+                            icon: 'refresh' as const,
+                            onSelect: () => setSubnetStatus(s, st),
+                          })),
+                          { label: 'Delete subnet', icon: 'trash' as const, danger: true, onSelect: () => removeSubnet(s), disabled: user?.role === 'viewer' },
+                        ]}
+                      />
                     </td>
                   </tr>
                 ))}

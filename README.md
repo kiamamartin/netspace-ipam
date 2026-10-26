@@ -41,6 +41,14 @@ npm install
 npm run dev            # http://localhost:5173 (proxies /api to :8000)
 ```
 
+Optional — load the realistic enterprise demo dataset (multi-site topology,
+VLANs, tracked IPs, plans; backs up and resets the dev DB):
+
+```bash
+cd backend && .venv/Scripts/python.exe scripts/seed_enterprise.py
+# see docs/DATA.md for what it contains
+```
+
 ## Quick start (Docker)
 
 ```bash
@@ -54,17 +62,21 @@ docker compose up --build
 ```bash
 cd backend && pytest -q && ruff check .     # 155 tests, lint clean
 cd frontend && npm run build && npm run lint # tsc + vite build, oxlint clean
+cd frontend && npm run test:ui              # headless-browser UI smoke test (Edge/Chrome,
+                                            # backend + `npm run dev` must be running)
 ```
 
 ## Repository layout
 
 ```
 backend/            FastAPI app, VLSM engine, Alembic migrations, tests
-frontend/           React + TS app (Vite), print stylesheet, oxlint
+frontend/           React + TS app (Vite): Ark UI design system, light/dark
+                    themes, print stylesheet, oxlint, UI smoke test
 docker-compose.yml  One-command stack (backend + frontend + volume)
-docs/API.md         Endpoint reference
+docs/               API reference, architecture, docs maintenance policy
 DELIVERY.md         Delivery report: acceptance criteria & verification
 ```
 
-See `docs/API.md` for the endpoint reference and `DELIVERY.md` for the
-acceptance/verification report.
+See `docs/API.md` for the endpoint reference, `docs/ARCHITECTURE.md` for the
+full-stack architecture, and `DELIVERY.md` for the acceptance/verification
+report. `docs/README.md` defines how those docs are kept current.

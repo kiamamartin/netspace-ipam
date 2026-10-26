@@ -25,6 +25,9 @@ class Settings(BaseSettings):
 
     # Comma separated list. Use "*" to allow all origins (development only).
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    auth_secret: str = ""
+    jwt_expires_minutes: int = 480
+    max_request_body_bytes: int = 1_048_576  # 1 MiB guard for exposed endpoints
 
     # Limits
     max_departments_per_plan: int = 256
@@ -33,6 +36,13 @@ class Settings(BaseSettings):
 
     # VLSM
     algorithm_version: str = "vlsm-1.0.0"
+
+    # Auth (M5). Leave auth_secret empty to auto-generate a per-process secret
+    # (dev convenience: tokens do not survive restarts). Set a strong random
+    # value in production; never commit it to source control.
+    auth_secret: str = ""
+    jwt_expires_minutes: int = 480
+    max_request_body_bytes: int = 1_048_576  # 1 MiB guard for exposed endpoints
 
     @property
     def cors_origins_list(self) -> list[str]:

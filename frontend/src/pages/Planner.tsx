@@ -1,7 +1,8 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, errorMessage, type VlsmResult } from '../api'
-import { ErrorBanner, PageHead, SuccessBanner } from '../ui'
+import { ErrorBanner, Icon, NumberField, PageHead } from '../ui'
+import { notify } from '../feedback'
 
 interface DeptRow {
   key: number
@@ -41,7 +42,6 @@ export default function Planner() {
   const [notes, setNotes] = useState('')
   const [result, setResult] = useState<VlsmResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const update = (key: number, patch: Partial<DeptRow>) =>
@@ -71,7 +71,6 @@ export default function Planner() {
   async function preview(e?: FormEvent) {
     e?.preventDefault()
     setError(null)
-    setSuccess(null)
     setBusy(true)
     try {
       const res = await api.post<VlsmResult>('/api/v1/calculator/vlsm', payload)
@@ -90,7 +89,6 @@ export default function Planner() {
       return
     }
     setError(null)
-    setSuccess(null)
     setBusy(true)
     try {
       const plan = await api.post<{ id: number }>('/api/v1/allocation-plans', {
@@ -98,7 +96,7 @@ export default function Planner() {
         notes: notes || null,
         ...payload,
       })
-      setSuccess(`Plan saved — opening it…`)
+      notify.success('Plan saved', `“${planName.trim()}” is ready to review.`)
       navigate(`/plans/${plan.id}`)
     } catch (err) {
       setError(errorMessage(err))
@@ -114,7 +112,6 @@ export default function Planner() {
         sub="Describe requirements, preview the allocation, then save it as a plan"
       />
       <ErrorBanner message={error} />
-      <SuccessBanner message={success} />
 
       <div className="card">
         <form className="form-grid" onSubmit={preview}>
@@ -128,14 +125,14 @@ export default function Planner() {
           </label>
           <div className="form-actions" style={{ alignSelf: 'end' }}>
             <button className="btn" type="submit" disabled={busy}>
-              {busy ? 'Working…' : 'Preview allocation'}
+              {busy ? 'Working…' : <><Icon name="eye" size={13} /> Preview allocation</>}
             </button>
             <button
               className="btn ghost"
               type="button"
               onClick={() => setRows((rs) => [...rs, blankRow('', 10)])}
             >
-              + Add department
+              <Icon name="plus" size={13} /> Add department
             </button>
           </div>
         </form>
@@ -164,21 +161,19 @@ export default function Planner() {
                       placeholder="Department name"
                     />
                   </td>
-                  <td style={{ width: 90 }}>
-                    <input
-                      type="number"
-                      min={1}
+                  <td style={{ width: 100 }}>
+                    <NumberField
                       value={r.required_hosts}
-                      onChange={(e) => update(r.key, { required_hosts: Number(e.target.value) })}
+                      onChange={(v) => update(r.key, { required_hosts: v })}
+                      min={1}
                     />
                   </td>
-                  <td style={{ width: 80 }}>
-                    <input
-                      type="number"
+                  <td style={{ width: 90 }}>
+                    <NumberField
+                      value={r.vlan_id === '' ? '' : Number(r.vlan_id)}
+                      onChange={(v) => update(r.key, { vlan_id: String(v) })}
                       min={1}
                       max={4094}
-                      value={r.vlan_id}
-                      onChange={(e) => update(r.key, { vlan_id: e.target.value })}
                       placeholder="—"
                     />
                   </td>
@@ -189,14 +184,11 @@ export default function Planner() {
                       placeholder="—"
                     />
                   </td>
-                  <td style={{ width: 90 }}>
-                    <input
-                      type="number"
-                      min={0}
+                  <td style={{ width: 100 }}>
+                    <NumberField
                       value={r.additional_reserved_addresses}
-                      onChange={(e) =>
-                        update(r.key, { additional_reserved_addresses: Number(e.target.value) })
-                      }
+                      onChange={(v) => update(r.key, { additional_reserved_addresses: v })}
+                      min={0}
                     />
                   </td>
                   <td style={{ width: 90 }}>
@@ -216,11 +208,12 @@ export default function Planner() {
                   <td className="no-print" style={{ width: 40 }}>
                     <button
                       type="button"
-                      className="btn subtle small"
-                      title="Remove"
+                      className="btn subtle small icon"
+                      title="Remove department"
+                      aria-label={`Remove ${r.name || 'department'}`}
                       onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}
                     >
-                      ✕
+                      <Icon name="x" size={12} />
                     </button>
                   </td>
                 </tr>
@@ -256,7 +249,7 @@ export default function Planner() {
                   placeholder="Notes (optional)"
                 />
                 <button className="btn" disabled={busy} onClick={savePlan}>
-                  Save as plan
+                  <Icon name="save" size={13} /> {busy ? 'Saving…' : 'Save as plan'}
                 </button>
               </div>
             </div>

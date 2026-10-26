@@ -45,6 +45,7 @@ class AllocationPolicyInput(BaseModel):
     allow_host_route: bool = False
     growth_percent: float = Field(0.0, ge=0, le=1000, description="Default growth allowance applied to every department")
     utilization_warning_threshold: float = Field(80.0, ge=0, le=100)
+    max_departments: int = Field(256, ge=1, le=10000, description="Maximum number of departments allowed in one plan")
 
 
 class VLSMRequest(BaseModel):

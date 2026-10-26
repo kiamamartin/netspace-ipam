@@ -7,7 +7,15 @@ import {
   type Plan,
   type PlanListItem,
 } from '../api'
-import { Badge, ErrorBanner, ExportButtons, PageHead, SuccessBanner } from '../ui'
+import {
+  Badge,
+  ErrorBanner,
+  ExportButtons,
+  Icon,
+  Loading,
+  PageHead,
+} from '../ui'
+import { confirmAction, notify } from '../feedback'
 
 function PlanList() {
   const [items, setItems] = useState<PlanListItem[]>([])
@@ -27,7 +35,7 @@ function PlanList() {
         sub="Saved VLSM plans — preview, activate and export"
         actions={
           <Link className="btn" to="/planner">
-            New plan
+            <Icon name="plus" size={13} /> New plan
           </Link>
         }
       />
@@ -74,12 +82,11 @@ function PlanList() {
   )
 }
 
-function PlanDetail() {
+function PlanDetail({ user }: { user: AuthUser | null }) {
   const { planId } = useParams()
   const navigate = useNavigate()
   const [plan, setPlan] = useState<Plan | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [notes, setNotes] = useState('')
 
@@ -99,27 +106,42 @@ function PlanDetail() {
 
   async function act(action: 'activate' | 'recalculate' | 'archive') {
     setError(null)
-    setSuccess(null)
     setBusy(true)
     try {
-      if (action === 'activate') {
-        if (!window.confirm('Activate this plan? It will be committed to the inventory.'))
-          return
+      // viewers cannot operate on plans
+      if (user?.role === 'viewer') {
+        notify.error('Plans cannot be operated on in viewer role')
+        setBusy(false)
+        return
+      }
+          if (action === 'activate') {
+        const ok = await confirmAction({
+          title: 'Activate this plan?',
+          description: 'The allocation will be committed to the inventory as subnets. This cannot be undone.',
+          confirmLabel: 'Activate plan',
+        })
+        if (!ok) return
         const res = await api.post<{ subnets_created: number }>(
           `/api/v1/allocation-plans/${planId}/activate`,
         )
-        setSuccess(`Plan activated — ${res.subnets_created} subnet(s) created.`)
+        notify.success('Plan activated', `${res.subnets_created} subnet(s) created.`)
       } else if (action === 'recalculate') {
         await api.post(`/api/v1/allocation-plans/${planId}/recalculate`)
-        setSuccess('Plan recalculated from stored inputs.')
+        notify.success('Plan recalculated', 'Results were rebuilt from the stored inputs.')
       } else {
-        if (!window.confirm('Archive this plan?')) return
+        const ok = await confirmAction({
+          title: 'Archive this plan?',
+          description: 'Archived plans stay available for reference but cannot be activated.',
+          confirmLabel: 'Archive',
+        })
+        if (!ok) return
         await api.post(`/api/v1/allocation-plans/${planId}/archive`)
-        setSuccess('Plan archived.')
+        notify.success('Plan archived')
       }
       load()
     } catch (err) {
       setError(errorMessage(err))
+      notify.error('Action failed', errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -129,14 +151,14 @@ function PlanDetail() {
     setError(null)
     try {
       await api.patch(`/api/v1/allocation-plans/${planId}`, { notes })
-      setSuccess('Notes saved.')
+      notify.success('Notes saved')
       load()
     } catch (err) {
       setError(errorMessage(err))
     }
   }
 
-  if (!plan) return <ErrorBanner message={error ?? 'Loading plan…'} />
+  if (!plan) return <Loading label="Loading plan…" />
   const results = plan.results
 
   return (
@@ -154,23 +176,22 @@ function PlanDetail() {
               onClick={() => act('activate')}
               title={plan.status !== 'draft' ? 'Only draft plans can be activated' : ''}
             >
-              Activate
+              <Icon name="power" size={13} /> Activate
             </button>
             <button className="btn subtle small" disabled={busy} onClick={() => act('recalculate')}>
-              Recalculate
+              <Icon name="refresh" size={13} /> Recalculate
             </button>
             <button
               className="btn danger small"
               disabled={busy || plan.status === 'archived'}
               onClick={() => act('archive')}
             >
-              Archive
+              <Icon name="archive" size={13} /> Archive
             </button>
           </>
         }
       />
       <ErrorBanner message={error} />
-      <SuccessBanner message={success} />
 
       <div className="card">
         <h3>Allocations</h3>
@@ -251,7 +272,7 @@ function PlanDetail() {
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} />
         <div className="form-actions no-print">
           <button className="btn small" onClick={saveNotes}>
-            Save notes
+            <Icon name="save" size={13} /> Save notes
           </button>
           <button className="btn ghost small" onClick={() => navigate('/plans')}>
             ← Back to plans
@@ -264,5 +285,6 @@ function PlanDetail() {
 
 export default function Plans() {
   const { planId } = useParams()
-  return planId ? <PlanDetail /> : <PlanList />
+  const user = getUser()
+  return planId ? <PlanDetail user={user} /> : <PlanList />
 }

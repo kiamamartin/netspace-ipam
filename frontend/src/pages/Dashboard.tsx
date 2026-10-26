@@ -1,8 +1,16 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, errorMessage, type AuditEvent, type DashboardSummary } from '../api'
-import { ErrorBanner, Meter, PageHead } from '../ui'
+import { ErrorBanner, Loading, Meter, PageHead, Stat, Tip, Icon, CopyValue } from '../ui'
 import { kv } from '../kv'
+
+const ACTION_BADGE: Record<string, string> = {
+  create: 'ok',
+  update: 'reserved',
+  delete: 'danger',
+  activate: 'ok',
+  archive: 'neutral',
+}
 
 export default function Dashboard() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
@@ -27,7 +35,7 @@ export default function Dashboard() {
   }, [])
 
   if (error) return <ErrorBanner message={error} />
-  if (!summary) return <div className="muted">Loading dashboard…</div>
+  if (!summary) return <Loading label="Loading dashboard…" />
 
   const ipTotal =
     summary.ip_available + summary.ip_reserved + summary.ip_assigned + summary.ip_deprecated
@@ -36,36 +44,44 @@ export default function Dashboard() {
     <>
       <PageHead title="Dashboard" sub="IPAM posture across all networks" />
       <div className="grid cols-4">
-        <div className="stat">
-          <div className="label">Networks</div>
-          <div className="value">{summary.total_networks}</div>
-          <div className="hint">{summary.total_subnets} subnets allocated</div>
-        </div>
-        <div className="stat">
-          <div className="label">IP addresses</div>
-          <div className="value">{summary.total_ip_addresses}</div>
-          <div className="hint">
-            {summary.ip_assigned} assigned · {summary.ip_available} free
-          </div>
-        </div>
-        <div className="stat">
-          <div className="label">Avg utilization</div>
-          <div className="value">{summary.average_utilization_percent.toFixed(1)}%</div>
-          <div className="hint">of allocated address space</div>
-        </div>
-        <div className="stat">
-          <div className="label">Plans</div>
-          <div className="value">{summary.total_plans}</div>
-          <div className="hint">{summary.active_plans} active</div>
-        </div>
+        <Stat
+          label="Networks"
+          value={summary.total_networks}
+          hint={`${summary.total_subnets} subnets allocated`}
+          dotColor="#2563eb"
+        />
+        <Stat
+          label="IP addresses"
+          value={summary.total_ip_addresses.toLocaleString()}
+          hint={`${summary.ip_assigned} assigned · ${summary.ip_available} free`}
+          dotColor="#12805c"
+        />
+        <Stat
+          label="Avg utilization"
+          value={`${summary.average_utilization_percent.toFixed(1)}%`}
+          hint="of allocated address space"
+          dotColor={
+            summary.average_utilization_percent >= 85 ? '#c02626' : '#a05e03'
+          }
+        />
+        <Stat
+          label="Plans"
+          value={summary.total_plans}
+          hint={`${summary.active_plans} active`}
+          dotColor="#7c3aed"
+        />
       </div>
 
       {summary.conflicts.length > 0 && (
-        <div className="banner error" style={{ marginTop: 16 }}>
-          <strong>{summary.conflicts.length} conflict(s) detected:</strong>{' '}
-          {summary.conflicts.map((c, i) => (
-            <span key={i}>{JSON.stringify(c)} </span>
-          ))}
+        <div className="banner error" style={{ marginTop: 16 }} role="alert">
+          <div>
+            <strong>{summary.conflicts.length} conflict(s) detected:</strong>{' '}
+            {summary.conflicts.map((c, i) => (
+              <span key={i} className="mono small">
+                {JSON.stringify(c)}{' '}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
@@ -73,7 +89,9 @@ export default function Dashboard() {
         <div className="card">
           <h3>Network utilization</h3>
           {summary.networks.length === 0 ? (
-            <div className="empty">No networks yet — create one under Networks.</div>
+            <div className="empty">
+              No networks yet — create one under <Link to="/networks">Networks</Link>.
+            </div>
           ) : (
             <div className="table-wrap">
               <table>
@@ -82,7 +100,7 @@ export default function Dashboard() {
                     <th>Network</th>
                     <th>CIDR</th>
                     <th className="num">Subnets</th>
-                    <th style={{ width: '30%' }}>Utilization</th>
+                    <th style={{ width: '32%' }}>Utilization</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -91,7 +109,9 @@ export default function Dashboard() {
                       <td>
                         <Link to={`/networks/${n.network_id}`}>{n.name}</Link>
                       </td>
-                      <td className="mono">{n.cidr}</td>
+                      <td>
+                        <CopyValue value={n.cidr} />
+                      </td>
                       <td className="num">{n.subnet_count}</td>
                       <td>
                         <Meter percent={n.utilization_percent} hot={n.utilization_percent >= 85} />
@@ -113,6 +133,7 @@ export default function Dashboard() {
               <div className="warn-list">
                 {summary.near_capacity.map((n) => (
                   <div key={n.network_id}>
+                    <Icon name="alert" size={12} style={{ verticalAlign: -1, marginRight: 4 }} />
                     {n.name} ({n.cidr}) — {n.utilization_percent.toFixed(1)}% used
                   </div>
                 ))}
@@ -124,14 +145,11 @@ export default function Dashboard() {
         <div className="card">
           <h3>Address space</h3>
           <div className="kv">
-            {kv('Assigned', summary.ip_assigned)}
-            {kv('Reserved', summary.ip_reserved)}
-            {kv('Available', summary.ip_available)}
-            {kv('Deprecated', summary.ip_deprecated)}
-            {kv(
-              'Tracked',
-              ipTotal.toLocaleString(),
-            )}
+            {kv('Assigned', summary.ip_assigned.toLocaleString())}
+            {kv('Reserved', summary.ip_reserved.toLocaleString())}
+            {kv('Available', summary.ip_available.toLocaleString())}
+            {kv('Deprecated', summary.ip_deprecated.toLocaleString())}
+            {kv('Tracked', ipTotal.toLocaleString())}
           </div>
 
           <h3 style={{ marginTop: 20 }}>Recent activity</h3>
@@ -150,9 +168,15 @@ export default function Dashboard() {
                 <tbody>
                   {audit.map((e) => (
                     <tr key={e.id}>
-                      <td className="small muted">{new Date(e.timestamp).toLocaleString()}</td>
+                      <td className="small muted">
+                        <Tip content={new Date(e.timestamp).toISOString()}>
+                          <span>{new Date(e.timestamp).toLocaleString()}</span>
+                        </Tip>
+                      </td>
                       <td>
-                        <span className="badge neutral">{e.action}</span>{' '}
+                        <span className={`badge ${ACTION_BADGE[e.action] ?? 'neutral'}`}>
+                          {e.action}
+                        </span>{' '}
                         <span className="small muted">
                           {e.resource_type} #{e.resource_id}
                         </span>

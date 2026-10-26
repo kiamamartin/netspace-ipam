@@ -1,11 +1,46 @@
-"""Integration tests for allocation plans: save, activate, recalculate, archive."""
+"""Integration tests for allocation plans: save, activate, recalculate, archive.
+
+Since M5 the planning write endpoints require an authenticated operator/admin
+bearer token (401 otherwise). An autouse fixture injects the shared admin token
+into this module's TestClient so the endpoint tests exercise the same contract.
+Anonymous/role-rejection behavior is covered by ``test_auth.py``.
+"""
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _auth_admin_token(client: TestClient, admin_token: str) -> None:
+    """Default Authorization header for every request in this module (M5 AAA)."""
+    client.headers["Authorization"] = f"Bearer {admin_token}"
+
+
 def _save_plan(client: TestClient, name: str = "Q1 Plan", payload: dict | None = None) -> dict:
+    from app.core.config import get_settings
+    from app.core.security import encode_token, password_hash, runtime_secret
+    from app.db.session import SessionLocal
+    from app.models.user import User
+
+    settings = get_settings()
+    with SessionLocal() as db:
+        admin = db.query(User).filter(User.username == "adminuser").first()
+        if admin is None:
+            admin = User(
+                username="adminuser",
+                role="admin",
+                password_hash=password_hash("AdminPass1!"),
+            )
+            db.add(admin)
+            db.commit()
+            db.refresh(admin)
+        token = encode_token(
+            {"uid": admin.id, "role": admin.role},
+            runtime_secret(settings.auth_secret),
+            expires_minutes=settings.jwt_expires_minutes,
+        )
     payload = payload or {
         "base_network": "192.168.10.0/24",
         "departments": [
@@ -13,7 +48,7 @@ def _save_plan(client: TestClient, name: str = "Q1 Plan", payload: dict | None =
             {"name": "ICT", "required_hosts": 25},
         ],
     }
-    r = client.post("/api/v1/allocation-plans", json={"name": name, **payload})
+    r = client.post("/api/v1/allocation-plans", json={"name": name, **payload}, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 201, r.text
     return r.json()
 

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_operator
 from app.db.session import get_db
 from app.schemas.inventory import NetworkCreate, NetworkDetail, NetworkRead, NetworkUpdate
 from app.services import ipam_service
@@ -20,7 +21,7 @@ def list_networks(
     q: str | None = Query(None, description="Search name, CIDR, site or description"),
     family: int | None = Query(None, description="4 or 6"),
     environment: str | None = Query(None),
-    status_filter: str | None = Query(None, alias="status"),
+    status: str | None = Query(None, alias="status"),
     site: str | None = Query(None),
     sort: str = Query("created_at"),
     order: str = Query("desc"),
@@ -32,7 +33,7 @@ def list_networks(
         q=q,
         family=family,
         environment=environment,
-        status=status_filter,
+        status=status,
         site=site,
         sort=sort,
         order=order,
@@ -40,20 +41,32 @@ def list_networks(
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Create a network")
-def create_network(payload: NetworkCreate, db: Session = Depends(get_db)) -> NetworkRead:
-    return ipam_service.create_network(db, payload.model_dump())
+def create_network(
+    payload: NetworkCreate,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> NetworkRead:
+    return ipam_service.create_network(db, payload.model_dump(), actor=getattr(actor, "username", None))
 
 
 @router.get("/{network_id}", response_model=NetworkDetail, summary="Get a network")
 def get_network(network_id: int, db: Session = Depends(get_db)) -> NetworkDetail:
+    obj = ipam_service.get_network(db, network_id)
+    if obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Network not found")
     return ipam_service.network_detail(db, network_id)
 
 
 @router.patch("/{network_id}", summary="Update a network")
 def update_network(
-    network_id: int, payload: NetworkUpdate, db: Session = Depends(get_db)
+    network_id: int,
+    payload: NetworkUpdate,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
 ) -> NetworkRead:
-    return ipam_service.update_network(db, network_id, payload.model_dump(exclude_unset=True))
+    return ipam_service.update_network(
+        db, network_id, payload.model_dump(exclude_unset=True), actor=getattr(actor, "username", None)
+    )
 
 
 @router.delete(
@@ -61,6 +74,13 @@ def update_network(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a network",
 )
-def delete_network(network_id: int, db: Session = Depends(get_db)) -> Response:
-    ipam_service.delete_network(db, network_id)
+def delete_network(
+    network_id: int,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> Response:
+    obj = ipam_service.get_network(db, network_id)
+    if obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Network not found")
+    ipam_service.delete_network(db, network_id, actor=getattr(actor, "username", None))
     return Response(status_code=status.HTTP_204_NO_CONTENT)

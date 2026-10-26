@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_operator
 from app.db.session import get_db
 from app.schemas.inventory import SubnetCreate, SubnetRead, SubnetUpdate
 from app.services import ipam_service
@@ -32,7 +33,7 @@ def list_subnets(
         q=q,
         network_id=network_id,
         vlan_id=vlan_id,
-        status=status_filter,
+        status_filter=status_filter,
         family=family,
         sort=sort,
         order=order,
@@ -40,13 +41,13 @@ def list_subnets(
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Create a subnet")
-def create_subnet(payload: SubnetCreate, db: Session = Depends(get_db)) -> SubnetRead:
-    obj = ipam_service.create_subnet(db, payload.model_dump())
-    data = ipam_service.list_subnets(db, network_id=obj.network_id, q=obj.cidr, page_size=200)
-    for item in data["items"]:
-        if item["id"] == obj.id:
-            return item  # type: ignore[return-value]
-    raise AssertionError("created subnet not found")  # pragma: no cover
+def create_subnet(
+    payload: SubnetCreate,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> SubnetRead:
+    obj = ipam_service.create_subnet(db, payload.model_dump(), actor=getattr(actor, "username", None))
+    return get_subnet(obj.id, db)  # type: ignore[return-value]
 
 
 @router.get("/{subnet_id}", summary="Get a subnet")
@@ -65,9 +66,14 @@ def get_subnet(subnet_id: int, db: Session = Depends(get_db)) -> dict:
 
 @router.patch("/{subnet_id}", summary="Update a subnet")
 def update_subnet(
-    subnet_id: int, payload: SubnetUpdate, db: Session = Depends(get_db)
+    subnet_id: int,
+    payload: SubnetUpdate,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
 ) -> SubnetRead:
-    ipam_service.update_subnet(db, subnet_id, payload.model_dump(exclude_unset=True))
+    ipam_service.update_subnet(
+        db, subnet_id, payload.model_dump(exclude_unset=True), actor=getattr(actor, "username", None)
+    )
     return get_subnet(subnet_id, db)  # type: ignore[return-value]
 
 
@@ -77,7 +83,8 @@ def update_subnet(
 def delete_subnet(
     subnet_id: int,
     force: bool = Query(False, description="Delete even when addresses are assigned/reserved"),
+    actor: object = Depends(require_operator),
     db: Session = Depends(get_db),
 ) -> Response:
-    ipam_service.delete_subnet(db, subnet_id, force=force)
+    ipam_service.delete_subnet(db, subnet_id, force=force, actor=getattr(actor, "username", None))
     return Response(status_code=status.HTTP_204_NO_CONTENT)

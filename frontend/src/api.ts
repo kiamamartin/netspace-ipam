@@ -3,6 +3,8 @@
  * All errors are normalized to `ApiError` with the backend's message.
  */
 
+import { authHeader, clearSession, getToken } from './auth'
+
 export interface Paginated<T> {
   items: T[]
   total: number
@@ -215,9 +217,13 @@ export interface SubnetCalcResult {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+    headers: { 'Content-Type': 'application/json', ...authHeader(), ...(init.headers ?? {}) },
     ...init,
   })
+  // Expired/invalid token: drop the local session; the shell shows the login.
+  if (res.status === 401 && getToken() !== null && !path.includes('/auth/login') && path !== '/health') {
+    clearSession()
+  }
   if (!res.ok) {
     let code = 'error'
     let message = `Request failed (${res.status})`
@@ -235,6 +241,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(res.status, code, message, details)
   }
   if (res.status === 204) return undefined as T
+  if (res.status === 500) {
+    try {
+      const body = await res.json()
+      if (body?.error?.message) {
+        throw new ApiError(500, 'internal_error', body.error.message)
+      }
+    } catch {}
+    throw new ApiError(500, 'internal_error', 'Server error — please try again')
+  }
   return (await res.json()) as T
 }
 

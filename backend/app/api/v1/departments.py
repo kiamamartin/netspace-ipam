@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_operator
 from app.db.session import get_db
 from app.schemas.inventory import DepartmentCreate, DepartmentRead, DepartmentUpdate
 from app.services import ipam_service
@@ -23,8 +24,12 @@ def list_departments(
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Create a department")
-def create_department(payload: DepartmentCreate, db: Session = Depends(get_db)) -> DepartmentRead:
-    return ipam_service.create_department(db, payload.model_dump())
+def create_department(
+    payload: DepartmentCreate,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> DepartmentRead:
+    return ipam_service.create_department(db, payload.model_dump(), actor=getattr(actor, "username", None))
 
 
 @router.get("/{department_id}", summary="Get a department")
@@ -34,14 +39,23 @@ def get_department(department_id: int, db: Session = Depends(get_db)) -> Departm
 
 @router.patch("/{department_id}", summary="Update a department")
 def update_department(
-    department_id: int, payload: DepartmentUpdate, db: Session = Depends(get_db)
+    department_id: int,
+    payload: DepartmentUpdate,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
 ) -> DepartmentRead:
-    return ipam_service.update_department(db, department_id, payload.model_dump(exclude_unset=True))
+    return ipam_service.update_department(
+        db, department_id, payload.model_dump(exclude_unset=True), actor=getattr(actor, "username", None)
+    )
 
 
 @router.delete(
     "/{department_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a department"
 )
-def delete_department(department_id: int, db: Session = Depends(get_db)) -> Response:
-    ipam_service.delete_department(db, department_id)
+def delete_department(
+    department_id: int,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> Response:
+    ipam_service.delete_department(db, department_id, actor=getattr(actor, "username", None))
     return Response(status_code=status.HTTP_204_NO_CONTENT)

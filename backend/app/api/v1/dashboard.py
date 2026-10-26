@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin
 from app.db.session import get_db
 from app.schemas.inventory import DashboardSummary
 from app.services import ipam_service
@@ -17,8 +18,9 @@ def dashboard_summary(db: Session = Depends(get_db)) -> DashboardSummary:
     return ipam_service.dashboard_summary(db)
 
 
-@router.get("/audit-events", summary="List audit events")
+@router.get("/audit-events", summary="List audit events (admin)")
 def audit_events(
+    _: object = Depends(require_admin),
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
