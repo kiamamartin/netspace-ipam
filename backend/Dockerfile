@@ -11,6 +11,7 @@ WORKDIR /srv/app
 COPY pyproject.toml README.md alembic.ini ./
 COPY app ./app
 COPY migrations ./migrations
+COPY scripts ./scripts
 RUN pip install .
 
 # Dev convenience data dir (override NETSPACE_DATABASE_URL for real databases)
