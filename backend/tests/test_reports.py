@@ -8,8 +8,6 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import admin_token
-
 try:
     import openpyxl
 except ImportError:  # pragma: no cover

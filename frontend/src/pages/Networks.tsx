@@ -84,45 +84,6 @@ function NetworkList() {
     }
   }
 
-  async function setSubnetStatus(subnet: Subnet, status: string) {
-    setError(null)
-    if (user?.role === 'viewer') {
-      notify.error('Cannot change subnet status in viewer role')
-      return
-    }
-    try {
-      await api.patch(`/api/v1/subnets/${subnet.id}`, { status })
-      notify.success('Status updated', `${subnet.name} is now ${status}.`)
-      load()
-    } catch (err) {
-      setError(errorMessage(err))
-    }
-  }
-
-  async function removeSubnet(subnet: Subnet) {
-    // viewers cannot delete subnets
-    if (user?.role === 'viewer') {
-      notify.error('Subnets cannot be deleted in viewer role')
-      return
-    }
-    setError(null)
-    const ok = await confirmAction({
-      title: `Delete subnet ${subnet.name}?`,
-      description: `${subnet.cidr} and its tracked addresses will be removed from the inventory.`,
-      confirmLabel: 'Delete subnet',
-    })
-    if (!ok) return
-    setError(null)
-    try {
-      await api.delete(`/api/v1/subnets/${subnet.id}`)
-      notify.success('Subnet deleted', subnet.name)
-      load()
-    } catch (err) {
-      setError(errorMessage(err))
-      notify.error('Could not delete subnet', errorMessage(err))
-    }
-  }
-
   return (
     <>
       <PageHead

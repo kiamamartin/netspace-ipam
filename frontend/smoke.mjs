@@ -8,8 +8,19 @@ import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const EDGE =
-  process.env.EDGE_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
+// Browser discovery: EDGE_PATH wins; otherwise try common installs per platform
+// (Windows Edge, Linux microsoft-edge/chromium, macOS Edge).
+import { existsSync } from 'node:fs'
+const EDGE_CANDIDATES =
+  process.platform === 'win32'
+    ? [
+        'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+        'C:/Program Files/Google/Chrome/Application/chrome.exe',
+      ]
+    : process.platform === 'darwin'
+      ? ['/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge']
+      : ['/usr/bin/microsoft-edge', '/usr/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/chromium-browser']
+const EDGE = process.env.EDGE_PATH || EDGE_CANDIDATES.find((p) => existsSync(p)) || EDGE_CANDIDATES[0]
 const BASE = 'http://localhost:5173'
 const SHOTS = join(tmpdir(), 'netspace-smoke')
 mkdirSync(SHOTS, { recursive: true })

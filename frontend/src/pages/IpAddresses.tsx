@@ -38,19 +38,24 @@ export default function IpAddresses() {
   const load = useCallback(() => {
     const params = new URLSearchParams({ page: String(page), page_size: '25' })
     if (q) params.set('q', q)
+    if (status) params.set('status', status)
+    if (subnetId) params.set('subnet_id', subnetId)
     api
       .get<Paginated<IPAddress>>(`/api/v1/ip-addresses?${params}`)
       .then(setData)
       .catch((err) => setError(errorMessage(err)))
-  }, [page, q])
+  }, [page, q, status, subnetId])
+
+  // Reload whenever the query, filters or page change.
+  useEffect(() => {
+    load()
+  }, [load])
 
   useEffect(() => {
-    // fetch subnets first, then load IPs once the filter dropdown is ready
     api
       .get<Paginated<Subnet>>('/api/v1/subnets?page_size=200')
       .then((p) => {
         setSubnets(p.items)
-        load()
       })
       .catch(() => {
         setSubnets([])

@@ -6,7 +6,12 @@
 set -u
 cd "$(dirname "$0")/.." || exit 2
 
-PY="$PWD/backend/.venv/Scripts/python.exe"
+# Windows venvs live at .venv/Scripts/python.exe; POSIX venvs at .venv/bin/python.
+if [ -x "$PWD/backend/.venv/Scripts/python.exe" ]; then
+  PY="$PWD/backend/.venv/Scripts/python.exe"
+else
+  PY="$PWD/backend/.venv/bin/python"
+fi
 failures=0
 gate() { # name -> exit-code-capturing pipeline required
   if [ "$1" -eq 0 ]; then echo "PASS $2"; else echo "FAIL $2"; failures=$((failures+1)); fi

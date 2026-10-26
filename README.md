@@ -45,7 +45,7 @@ Optional — load the realistic enterprise demo dataset (multi-site topology,
 VLANs, tracked IPs, plans; backs up and resets the dev DB):
 
 ```bash
-cd backend && .venv/Scripts/python.exe scripts/seed_enterprise.py
+cd backend && .venv/bin/python scripts/seed_enterprise.py      # Windows: .venv\Scripts\python.exe scripts/seed_enterprise.py
 # see docs/DATA.md for what it contains
 ```
 

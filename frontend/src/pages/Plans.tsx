@@ -7,6 +7,7 @@ import {
   type Plan,
   type PlanListItem,
 } from '../api'
+import { getUser, type AuthUser } from '../auth'
 import {
   Badge,
   ErrorBanner,

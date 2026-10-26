@@ -243,6 +243,53 @@ def _subnet_id(client: TestClient, net: dict) -> int:
     return r.json()["id"]
 
 
+def test_ip_address_list_filters_and_pagination(client: TestClient) -> None:
+    """The IP Addresses page GET contract: search, status/subnet filters and the
+    pagination envelope must behave exactly as the UI relies on."""
+    net = _create_network(client)
+    sid = _subnet_id(client, net)
+    r = client.post(
+        "/api/v1/subnets",
+        json={"network_id": net["id"], "name": "B", "cidr": "192.168.10.64/26"},
+    )
+    assert r.status_code == 201, r.text
+    sid_b = r.json()["id"]
+
+    r = client.post(
+        "/api/v1/ip-addresses",
+        json={"subnet_id": sid, "address": "192.168.10.10", "hostname": "ws-a", "status": "assigned"},
+    )
+    assert r.status_code == 201, r.text
+    r = client.post(
+        "/api/v1/ip-addresses",
+        json={"subnet_id": sid_b, "address": "192.168.10.65", "device": "printer", "status": "reserved"},
+    )
+    assert r.status_code == 201, r.text
+
+    # q search matches hostname/device/description
+    r = client.get("/api/v1/ip-addresses", params={"q": "ws-a"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["hostname"] == "ws-a"
+
+    # status filter
+    r = client.get("/api/v1/ip-addresses", params={"status": "reserved"})
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["address"] == "192.168.10.65"
+
+    # subnet filter
+    r = client.get("/api/v1/ip-addresses", params={"subnet_id": sid})
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["address"] == "192.168.10.10"
+
+    # pagination envelope: two rows, one per page
+    r = client.get("/api/v1/ip-addresses", params={"page": 1, "page_size": 1})
+    body = r.json()
+    assert body["total"] == 2 and body["pages"] == 2 and len(body["items"]) == 1
+    r = client.get("/api/v1/ip-addresses", params={"page": 2, "page_size": 1})
+    assert len(r.json()["items"]) == 1
+
+
 def test_ip_address_crud(client: TestClient) -> None:
     net = _create_network(client)
     sid = _subnet_id(client, net)
