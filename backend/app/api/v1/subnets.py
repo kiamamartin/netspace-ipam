@@ -23,6 +23,8 @@ def list_subnets(
     vlan_id: int | None = Query(None),
     status_filter: str | None = Query(None, alias="status"),
     family: int | None = Query(None),
+    site: str | None = Query(None, description="Match the parent network's site"),
+    owner: str | None = Query(None, description="Match owner substring"),
     sort: str = Query("created_at"),
     order: str = Query("desc"),
 ) -> dict:
@@ -35,6 +37,8 @@ def list_subnets(
         vlan_id=vlan_id,
         status_filter=status_filter,
         family=family,
+        site=site,
+        owner=owner,
         sort=sort,
         order=order,
     )
@@ -61,7 +65,39 @@ def get_subnet(subnet_id: int, db: Session = Depends(get_db)) -> dict:
         "family": subnet_details(parse_network(obj.cidr)).get("family", 4),
         "details": subnet_details(parse_network(obj.cidr)),
         "ip_address_count": len(obj.ip_addresses),
+        "utilization": ipam_service.subnet_utilization_data(obj),
     }
+
+
+@router.get("/{subnet_id}/history", summary="Subnet allocation history (audit events)")
+def subnet_history(subnet_id: int, db: Session = Depends(get_db), limit: int = Query(100, ge=1, le=500)) -> list[dict]:
+    ipam_service.get_subnet(db, subnet_id)  # 404 when missing
+    return ipam_service.resource_history(db, "subnet", subnet_id, limit=limit)
+
+
+@router.post("/{subnet_id}/reserve", response_model=SubnetRead, summary="Reserve a subnet")
+def reserve_subnet(
+    subnet_id: int,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> SubnetRead:
+    ipam_service.reserve_subnet(db, subnet_id, actor=getattr(actor, "username", None))
+    return get_subnet(subnet_id, db)  # type: ignore[return-value]
+
+
+@router.post(
+    "/{subnet_id}/release",
+    response_model=SubnetRead,
+    summary="Release a subnet (record preserved for history)",
+)
+def release_subnet(
+    subnet_id: int,
+    force: bool = Query(False, description="Release even when addresses are assigned/reserved"),
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> SubnetRead:
+    ipam_service.release_subnet(db, subnet_id, force=force, actor=getattr(actor, "username", None))
+    return get_subnet(subnet_id, db)  # type: ignore[return-value]
 
 
 @router.patch("/{subnet_id}", summary="Update a subnet")

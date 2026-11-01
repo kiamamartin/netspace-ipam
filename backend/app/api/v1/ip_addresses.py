@@ -68,6 +68,39 @@ def update_ip_address(
     )
 
 
+@router.get("/{address_id}/history", summary="Address allocation history (audit events)")
+def ip_history(address_id: int, db: Session = Depends(get_db), limit: int = Query(100, ge=1, le=500)) -> list[dict]:
+    if ipam_service.get_ip_address(db, address_id, missing_ok=True) is None:
+        # the tracking row may already be gone (released); the allocation
+        # history survives, and 404 applies only when the resource never existed
+        if not ipam_service.resource_history(db, "ip_address", address_id, limit=1):
+            raise ValueError("not_found")
+    return ipam_service.resource_history(db, "ip_address", address_id, limit=limit)
+
+
+@router.post("/{address_id}/reserve", response_model=IPAddressRead, summary="Reserve an available address")
+def reserve_ip_address(
+    address_id: int,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> IPAddressRead:
+    return ipam_service.reserve_ip_address(db, address_id, actor=getattr(actor, "username", None))
+
+
+@router.post(
+    "/{address_id}/release",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Release a reserved address (tracking row removed, history kept)",
+)
+def release_ip_address(
+    address_id: int,
+    actor: object = Depends(require_operator),
+    db: Session = Depends(get_db),
+) -> Response:
+    ipam_service.release_ip_address(db, address_id, actor=getattr(actor, "username", None))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.delete(
     "/{address_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an IP address"
 )

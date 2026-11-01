@@ -2,6 +2,7 @@ import ipaddress
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -215,8 +216,37 @@ def subnet_summary_data(s: Subnet) -> dict[str, Any]:
         "gateway": s.gateway,
         "status": s.status,
         "description": s.description,
+        "owner": s.owner,
+        "location": s.location,
+        "ip_address_count": len(s.ip_addresses),
+        "utilization": subnet_utilization_data(s),
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+    }
+
+
+def subnet_utilization_data(s: Subnet) -> dict[str, Any]:
+    """Utilization and remaining capacity for a single subnet (M7-AC-004)."""
+    net = parse_network(s.cidr)
+    usable = (
+        net.num_addresses
+        if net.prefixlen in (31, 32, 127, 128)
+        else max(net.num_addresses - 2, 0)
+    )
+    counts: dict[str, int] = {"available": 0, "reserved": 0, "assigned": 0, "deprecated": 0}
+    for ip in s.ip_addresses:
+        counts[ip.status] = counts.get(ip.status, 0) + 1
+    in_use = counts["assigned"] + counts["reserved"]
+    return {
+        "total_addresses": net.num_addresses,
+        "usable_addresses": usable,
+        "tracked_addresses": counts["assigned"] + counts["reserved"] + counts["deprecated"],
+        "assigned_addresses": counts["assigned"],
+        "reserved_addresses": counts["reserved"],
+        "available_addresses": counts["available"],
+        "deprecated_addresses": counts["deprecated"],
+        "ip_utilization_percent": round(100.0 * in_use / usable, 2) if usable else 0.0,
+        "remaining_usable": usable - in_use,
     }
 
 
@@ -306,17 +336,6 @@ def create_subnet(db: Session, data: dict[str, Any], actor: str | None = None) -
     )
     if dup and dup.status != "released":
         raise ValueError("duplicate_cidr")
-    # overlapping active/released-pending siblings of the same parent are conflicts
-    for other in db.scalars(
-        select(Subnet).where(
-            Subnet.network_id == parent.id,
-            Subnet.status != "released",
-        )
-    ):
-        if dup is not None and other.id == dup.id:
-            continue
-        if net.overlaps(ipaddress.ip_network(other.cidr)):
-            raise ValueError("overlap")
     if dup:
         obj = dup
         obj.name = data["name"].strip()
@@ -325,25 +344,53 @@ def create_subnet(db: Session, data: dict[str, Any], actor: str | None = None) -
         obj.gateway = data.get("gateway")
         obj.status = data.get("status", "allocated")
         obj.description = data.get("description")
+        obj.owner = data.get("owner")
+        obj.location = data.get("location")
         db.flush()
+    else:
+        obj = Subnet(
+            network_id=parent.id,
+            name=data["name"].strip(),
+            cidr=str(net),
+            prefix_length=net.prefixlen,
+            vlan_id=data.get("vlan_id"),
+            gateway=data.get("gateway"),
+            status=data.get("status", "allocated"),
+            description=data.get("description"),
+            owner=data.get("owner"),
+            location=data.get("location"),
+        )
+        db.add(obj)
+        try:
+            db.flush()
+        except IntegrityError:
+            # a concurrent request raced us to the same (network_id, cidr)
+            db.rollback()
+            raise ValueError("duplicate_cidr") from None
+    # Conflict validation runs in the same transaction AFTER our own row is
+    # already pending: the un-committed INSERT holds the SQLite/PostgreSQL
+    # write lock, so any concurrent competing allocation settles first and is
+    # visible to this check — concurrent changes can never silently produce
+    # overlapping allocations (M7-AC-008). A conflict aborts this transaction.
+    for other in db.scalars(
+        select(Subnet).where(
+            Subnet.network_id == parent.id,
+            Subnet.status != "released",
+        )
+    ):
+        if other.id == obj.id:
+            continue
+        if net.overlaps(ipaddress.ip_network(other.cidr)):
+            raise ValueError("overlap")
+    if dup is None:
+        _audit(db, "subnet", obj.id, "create", f"Created subnet {obj.name} ({obj.cidr}) in {parent.name}", actor=actor)
+    else:
         _audit(db, "subnet", obj.id, "create", f"Re-allocated subnet {obj.name} ({obj.cidr}) in {parent.name}", actor=actor)
+    try:
         db.commit()
-        db.refresh(obj)
-        return obj
-    obj = Subnet(
-        network_id=parent.id,
-        name=data["name"].strip(),
-        cidr=str(net),
-        prefix_length=net.prefixlen,
-        vlan_id=data.get("vlan_id"),
-        gateway=data.get("gateway"),
-        status=data.get("status", "allocated"),
-        description=data.get("description"),
-    )
-    db.add(obj)
-    db.flush()
-    _audit(db, "subnet", obj.id, "create", f"Created subnet {obj.name} ({obj.cidr}) in {parent.name}", actor=actor)
-    db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ValueError("duplicate_cidr")
     db.refresh(obj)
     return obj
 
@@ -358,6 +405,8 @@ def list_subnets(
     vlan_id: int | None = None,
     status_filter: str | None = None,
     family: int | None = None,
+    site: str | None = None,
+    owner: str | None = None,
     sort: str = "created_at",
     order: str = "desc",
 ) -> dict[str, Any]:
@@ -370,6 +419,8 @@ def list_subnets(
                 Subnet.cidr.ilike(like),
                 Subnet.gateway.ilike(like),
                 Subnet.description.ilike(like),
+                Subnet.owner.ilike(like),
+                Subnet.location.ilike(like),
                 Network.name.ilike(like),
             )
         )
@@ -381,6 +432,10 @@ def list_subnets(
         stmt = stmt.where(Subnet.status == status_filter)
     if family:
         stmt = stmt.where(Network.family == family)
+    if site:
+        stmt = stmt.where(Network.site.ilike(f"%{site.strip()}%"))
+    if owner:
+        stmt = stmt.where(Subnet.owner.ilike(f"%{owner.strip()}%"))
     sort_col = {
         "name": Subnet.name,
         "cidr": Subnet.cidr,
@@ -403,8 +458,12 @@ def list_subnets(
             "gateway": r.gateway,
             "status": r.status,
             "description": r.description,
+            "owner": r.owner,
+            "location": r.location,
             "network_id": r.network_id,
             "family": r.network.family,
+            "ip_address_count": len(r.ip_addresses),
+            "utilization": subnet_utilization_data(r),
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }
@@ -435,9 +494,20 @@ def update_subnet(
         net, gw_addr = _check_subnet_geometry(db, parent, obj.cidr, data["gateway"], exclude_id=subnet_id)
         obj.gateway = str(gw_addr) if gw_addr else None
     if "status" in data:
-        obj.status = data["status"]
+        new_status = data["status"]
+        # release is a lifecycle transition (M7-AC-005): it must respect the same
+        # non-empty rule as the explicit release workflow, regardless of path.
+        if new_status == "released" and obj.status != "released":
+            active = [ip for ip in obj.ip_addresses if ip.status in ("assigned", "reserved")]
+            if active:
+                raise ValueError("subnet_not_empty")
+        obj.status = new_status
     if "description" in data:
         obj.description = data["description"]
+    if "owner" in data:
+        obj.owner = data["owner"]
+    if "location" in data:
+        obj.location = data["location"]
     db.flush()
     _audit(db, "subnet", obj.id, "update", f"Updated subnet {obj.name} ({obj.cidr})", actor=actor)
     db.commit()
@@ -457,6 +527,101 @@ def delete_subnet(
     db.delete(obj)
     db.commit()
 
+
+# ---------------------------------------------------------------------------
+# Subnet lifecycle workflows (M7-AC-005) and resource history (M7-AC-006)
+# ---------------------------------------------------------------------------
+
+
+def reserve_subnet(db: Session, subnet_id: int, actor: str | None = None) -> Subnet:
+    """Mark a subnet as reserved (held for future use)."""
+    obj = get_subnet(db, subnet_id)
+    if obj.status in ("reserved", "released"):
+        raise ValueError("invalid_transition")
+    obj.status = "reserved"
+    db.flush()
+    _audit(db, "subnet", obj.id, "reserve", f"Reserved subnet {obj.name} ({obj.cidr})", actor=actor)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def release_subnet(
+    db: Session, subnet_id: int, *, force: bool = False, actor: str | None = None
+) -> Subnet:
+    """Release a subnet back to unallocated space.
+
+    The record itself is preserved (status ``released``) so the allocation
+    history survives an address-space change (M7-AC-006); re-allocating the
+    same CIDR reuses this row and keeps referencing the same audit history.
+    """
+    obj = get_subnet(db, subnet_id)
+    if obj.status == "released":
+        raise ValueError("invalid_transition")
+    if not force:
+        active = [ip for ip in obj.ip_addresses if ip.status in ("assigned", "reserved")]
+        if active:
+            raise ValueError("subnet_not_empty")
+    obj.status = "released"
+    db.flush()
+    _audit(db, "subnet", obj.id, "release", f"Released subnet {obj.name} ({obj.cidr})", actor=actor)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def reserve_ip_address(db: Session, address_id: int, actor: str | None = None) -> IPAddress:
+    """Reserve a currently untracked (available) address."""
+    obj = get_ip_address(db, address_id)
+    if obj.status != "available":
+        raise ValueError("invalid_transition")
+    obj.status = "reserved"
+    db.flush()
+    _audit(db, "ip_address", obj.id, "reserve", f"Reserved IP {obj.address} in {obj.subnet.name}", actor=actor)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def release_ip_address(db: Session, address_id: int, actor: str | None = None) -> None:
+    """Release a reserved address: the tracking row is removed and the address
+    becomes free; the release is recorded in the audit history."""
+    obj = get_ip_address(db, address_id)
+    if obj.status != "reserved":
+        raise ValueError("invalid_transition")
+    summary = f"Released reserved IP {obj.address} in {obj.subnet.name}"
+    _audit(db, "ip_address", obj.id, "release", summary, actor=actor)
+    db.delete(obj)
+    db.commit()
+
+
+def resource_history(
+    db: Session, resource_type: str, resource_id: int, *, limit: int = 100
+) -> list[dict[str, Any]]:
+    """Audit events for one resource, newest first (allocation history)."""
+    rows = list(
+        db.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.resource_type == resource_type,
+                AuditEvent.resource_id == str(resource_id),
+            )
+            .order_by(AuditEvent.timestamp.desc(), AuditEvent.id.desc())
+            .limit(limit)
+        ).all()
+    )
+    return [
+        {
+            "id": r.id,
+            "resource_type": r.resource_type,
+            "resource_id": r.resource_id,
+            "action": r.action,
+            "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+            "actor": r.actor,
+            "summary": r.summary,
+        }
+        for r in rows
+    ]
 
 # ---------------------------------------------------------------------------
 # IP addresses
@@ -511,9 +676,20 @@ def create_ip_address(db: Session, data: dict[str, Any], actor: str | None = Non
         description=data.get("description"),
     )
     db.add(obj)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # a concurrent request raced us to the same (subnet_id, address)
+        db.rollback()
+        raise ValueError("duplicate_assignment") from None
     _audit(db, "ip_address", obj.id, "create", f"Registered IP {obj.address} in {subnet.name}", actor=actor)
-    db.commit()
+    # The (subnet_id, address) unique constraint also backs the concurrent case:
+    # a racing second registration must surface as a clean 409 conflict.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise ValueError("duplicate_assignment")
     db.refresh(obj)
     return obj
 
@@ -588,9 +764,11 @@ def list_ip_addresses(
     return {"items": paged, "page": page, "page_size": page_size, "total": total, "pages": pages}
 
 
-def get_ip_address(db: Session, address_id: int) -> IPAddress:
+def get_ip_address(db: Session, address_id: int, *, missing_ok: bool = False) -> IPAddress | None:
     obj = db.get(IPAddress, address_id)
-    if not obj:
+    if obj is None:
+        if missing_ok:
+            return None
         raise ValueError("not_found")
     return obj
 

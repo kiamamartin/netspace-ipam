@@ -47,6 +47,10 @@ class SubnetSummary(ORMModel):
     gateway: str | None = None
     status: SubnetStatus
     description: str | None = None
+    owner: str | None = None
+    location: str | None = None
+    ip_address_count: int = 0
+    utilization: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -79,6 +83,8 @@ class SubnetCreate(BaseModel):
     gateway: str | None = None
     status: SubnetStatus = "allocated"
     description: str | None = None
+    owner: str | None = Field(None, max_length=200)
+    location: str | None = Field(None, max_length=200)
 
 
 class SubnetUpdate(BaseModel):
@@ -88,6 +94,8 @@ class SubnetUpdate(BaseModel):
     gateway: str | None = None
     status: SubnetStatus | None = None
     description: str | None = None
+    owner: str | None = Field(None, max_length=200)
+    location: str | None = Field(None, max_length=200)
 
 
 class SubnetRead(SubnetSummary):

@@ -208,6 +208,19 @@ def update_user(
         if user.id == admin.id and not updates["is_active"]:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot deactivate your own admin account")
         user.is_active = bool(updates["is_active"])
+
+    from app.models import AuditEvent
+
+    changed = ", ".join(sorted(updates)) or "no fields"
+    db.add(
+        AuditEvent(
+            actor=admin.username,
+            resource_type="user",
+            resource_id=str(user.id),
+            action="update",
+            summary=f"User updated: {user.username} ({changed})",
+        )
+    )
     db.commit()
     db.refresh(user)
     return user
@@ -231,6 +244,18 @@ def delete_user(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Cannot delete the last admin account",
             )
+
+    from app.models import AuditEvent
+
+    db.add(
+        AuditEvent(
+            actor=admin.username,
+            resource_type="user",
+            resource_id=str(user.id),
+            action="delete",
+            summary=f"User deleted: {user.username} ({user.role})",
+        )
+    )
     db.delete(user)
     db.commit()
     return None

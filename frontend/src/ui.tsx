@@ -9,7 +9,7 @@ import { Progress } from '@ark-ui/react/progress'
 import { Select, createListCollection } from '@ark-ui/react/select'
 import { Toast, Toaster } from '@ark-ui/react/toast'
 import { Tooltip } from '@ark-ui/react/tooltip'
-import { download } from './api'
+import { api, download, errorMessage, type HistoryEvent } from './api'
 import { setConfirmHandler, toaster, type ConfirmOptions } from './feedback'
 import { toggleTheme, useTheme } from './theme'
 
@@ -296,6 +296,82 @@ export function Modal({
 }
 
 /* ================================================================== *
+ * Resource history (audit trail for one subnet / address)
+ * ================================================================== */
+
+export function HistoryModal({
+  open,
+  onOpenChange,
+  title,
+  path,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  title: string
+  path: string
+}) {
+  const [events, setEvents] = useState<HistoryEvent[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    setEvents(null)
+    setError(null)
+    api
+      .get<HistoryEvent[]>(path)
+      .then((rows) => alive && setEvents(rows))
+      .catch((err) => alive && setError(errorMessage(err)))
+    return () => {
+      alive = false
+    }
+  }, [open, path])
+
+  return (
+    <Modal open={open} onOpenChange={onOpenChange} title={title} description="Newest events first." wide>
+      {error ? (
+        <ErrorBanner message={error} />
+      ) : events === null ? (
+        <Loading label="Loading history…" />
+      ) : events.length === 0 ? (
+        <div className="empty">No history recorded for this resource.</div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Action</th>
+                <th>Actor</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((e) => (
+                <tr key={e.id}>
+                  <td className="small muted">
+                    <Tip content={new Date(e.timestamp).toISOString()}>
+                      <span>{new Date(e.timestamp).toLocaleString()}</span>
+                    </Tip>
+                  </td>
+                  <td>
+                    <span className={`badge ${e.action === 'delete' || e.action === 'release' ? 'neutral' : 'ok'}`}>
+                      {e.action}
+                    </span>
+                  </td>
+                  <td className="small">{e.actor ?? '—'}</td>
+                  <td className="small">{e.summary ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+/* ================================================================== *
  * Form fields
  * ================================================================== */
 
@@ -349,6 +425,7 @@ export function SelectField({
   span = false,
   hideLabel = false,
   required = false,
+  disabled = false,
 }: {
   label: string
   value: string
@@ -358,6 +435,7 @@ export function SelectField({
   span?: boolean
   hideLabel?: boolean
   required?: boolean
+  disabled?: boolean
 }) {
   const collection = useMemo(() => createListCollection({ items: options }), [options])
   return (
@@ -367,6 +445,7 @@ export function SelectField({
       onValueChange={(details) => onChange(details.value[0] ?? '')}
       positioning={{ sameWidth: true }}
       required={required}
+      disabled={disabled}
     >
       <div style={span ? { gridColumn: '1 / -1' } : undefined}>
         {!hideLabel && (

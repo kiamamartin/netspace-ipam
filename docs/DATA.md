@@ -7,9 +7,19 @@ The local dev database ships with a realistic multi-site enterprise topology
 
 ```bash
 cd backend
-.venv/Scripts/python.exe scripts/seed_enterprise.py   # Windows
+NETSPACE_SEED_ADMIN_PASSWORD='...' \
+NETSPACE_SEED_OPERATOR_PASSWORD='...' \
+NETSPACE_SEED_VIEWER_PASSWORD='...' \
 .venv/bin/python scripts/seed_enterprise.py           # macOS/Linux
+# Windows: use .venv/Scripts/python.exe with the same environment variables.
 ```
+
+Passwords are supplied only through the environment and are never stored in
+the repository. If a password variable is omitted, the seed generates a
+one-time random password for a newly created account and prints it once;
+existing accounts keep their current password unless the matching variable is
+set. The seed creates or repairs the three demo accounts `admin`, `operator`
+and `viewer`.
 
 The script **backs up** the SQLite file (`netspace.bak-<timestamp>.db` next to
 it), **resets** all tables, then reseeds through the real service layer, so
@@ -29,6 +39,7 @@ recent-activity feed looks lived-in. Idempotent: re-run any time.
 | Planned branch | Nottingham `10.36.0.0/24` — network status `planned`, no subnets yet |
 | DMZ `172.16.0.0/24` | Public services /26 (mail edge, VPN, WAF-reserved) + firewall transit (reserved) |
 | Special-purpose | Corporate WLAN `10.40.0.0/22`, Voice/UC `10.50.0.0/25` (**fully carved → dashboard near-capacity warning**), Security & building systems `10.60.0.0/24`, Lab `10.99.0.0/16` |
+| Authentication | `admin` (admin), `operator` (operator), `viewer` (viewer) — passwords supplied via `NETSPACE_SEED_*_PASSWORD` |
 | Tracked IPs | 82 addresses: gateways, AD/DNS/DHCP, hypervisors, SQL nodes, CUCM, WLCs, APs, cameras, printers, scanners; mix of assigned/available/reserved/deprecated |
 | Allocation plans | `Sheffield Branch Rollout — Q1` (**draft**, 10.35.0.0/22, growth 10-25%), `Bristol Branch Opening` (**active** — activated through the real engine, committed as `Plan: Bristol Branch Opening`), `DC1 Expansion Phase 2` (**archived**) |
 
@@ -37,5 +48,6 @@ Conventions modelled: RFC1918 site summarisation, VLAN plan per site
 growth allowances on plan inputs, reserved infrastructure blocks, and a
 decommissioned subnet/IP left for audit realism.
 
-Validation results after seeding: **0 conflicts**, 12 networks, 41 subnets,
-82 IPs, 3 plans (draft/active/archived), 151 audit events.
+Validation results after seeding: **0 conflicts**, 12 networks, 42 subnets
+(37 allocated, 4 reserved, 1 released), 82 IPs, 3 plans (draft/active/archived),
+153 audit events.

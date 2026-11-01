@@ -32,6 +32,9 @@ if settings.database_url.startswith("sqlite"):
     def _set_sqlite_pragma(dbapi_connection, connection_record):  # type: ignore[no-untyped-def]
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        # Contending writers queue on the file lock instead of erroring out
+        # ('database is locked') under concurrent inventory mutations (M7-AC-008).
+        cursor.execute("PRAGMA busy_timeout=15000")
         cursor.close()
 
 

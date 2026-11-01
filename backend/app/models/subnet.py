@@ -37,6 +37,8 @@ class Subnet(Base, TimestampMixin):
     gateway: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="allocated", index=True)
     description: Mapped[str | None] = mapped_column(Text)
+    owner: Mapped[str | None] = mapped_column(String(200), index=True)
+    location: Mapped[str | None] = mapped_column(String(200))
 
     network: Mapped["Network"] = relationship(back_populates="subnets")
     ip_addresses: Mapped[list["IPAddress"]] = relationship(

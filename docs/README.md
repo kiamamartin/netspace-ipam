@@ -3,8 +3,9 @@
 | File | Contents |
 | --- | --- |
 | [API.md](API.md) | REST endpoint reference (request/response contracts) |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Full-stack architecture: backend layers, frontend design system (Ark UI), theming, testing |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Part I: v1 as-built full-stack architecture. Part II: v2 closed-loop automation target architecture, schema, workflows, security, and migration blueprint |
 | [DATA.md](DATA.md) | Enterprise demo dataset: what the seed contains and how to reseed |
+| [baseline/m6-m7-frontend-inventory.md](baseline/m6-m7-frontend-inventory.md) | M6/M7 gate evidence: frontend workflows, inventory lifecycle, seeded browser verification |
 
 ## Maintenance policy
 
@@ -21,6 +22,8 @@ reliably).
 - API contract change: new/changed endpoint, request/response shape, error code
 - New UI primitive in `src/ui.tsx`, design-token or theming change
 - Database model, migration, or service-layer (VLSM engine) change
+- Automation/execution-plane change: device inventory, job/event model,
+  template release contract, trust boundary, or security model
 - Testing/verification workflow change
 
 Small bug fixes and visual tweaks that change no structure do **not** require

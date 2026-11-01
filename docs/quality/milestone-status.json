@@ -1,6 +1,6 @@
 {
   "roadmap": "MILESTONES.md",
-  "updated": "2026-10-23",
+  "updated": "2026-11-01",
   "note": "Machine-readable mirror of MILESTONES.md gate statuses. A gate is a milestone-status, not progress claims. Evidence lives in the evidence_path of each milestone.",
   "milestones": {
     "M0": {
@@ -78,20 +78,49 @@
       ],
       "definition_of_done": "docs/baseline/m5-auth-authz.md §universal-definition-of-done"
     },
-    "M6": { "status": "NOT STARTED", "known_risk_refs": ["R-03"] },
-    "M7": { "status": "NOT STARTED" },
+    "M6": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m6-m7-frontend-inventory.md",
+      "known_risk_refs": ["R-03", "R-04"],
+      "executed_evidence": [
+        "frontend oxlint -> exit 0 (one pre-existing react(set-state-in-effect) warning in ui.tsx)",
+        "npm run build -> tsc -b + vite build exit 0",
+        "smoke.mjs against :5174 with backend :8001 -> 27 PASS checks including login, dashboard, nav, dialogs, toasts, validation error, 375px mobile, subnet owner/location; expected negative 422 and aborted teardown DELETE noted by the problem collector",
+        "role walkthrough with headless browser: viewer and operator dashboards render with no error banner; admin sees 8 nav links and the Users page lists 3 accounts"
+      ]
+    },
+    "M7": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m6-m7-frontend-inventory.md",
+      "executed_evidence": [
+        "pytest tests/test_inventory.py tests/concurrency -> 11 passed",
+        "pytest tests/test_auth.py -> 12 passed including operator/viewer dashboard-summary access",
+        "full backend suite -> 204 passed",
+        "subnet list and detail read models include ip_address_count and utilization; network detail table renders utilization meters and lifecycle/history actions",
+        "UI history modal verified for a seeded subnet; seeded dataset contains 42 subnets and 82 tracked addresses"
+      ]
+    },
     "M8": { "status": "NOT STARTED" },
     "M9": { "status": "NOT STARTED" },
     "M10": { "status": "NOT STARTED", "known_risk_refs": ["R-05"] },
-    "M11": { "status": "NOT STARTED" }
+    "M11": { "status": "NOT STARTED" },
+    "M12": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M7", "M10"] },
+    "M13": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M12"] },
+    "M14": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M13"] },
+    "M15": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M14"] },
+    "M16": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M15"] },
+    "M17": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M11", "M16"] }
   },
   "risks": {
-    "R-01": "Legacy seeded SQLite DB lacks alembic_version; alembic upgrade head fails 'table departments already exists'. Remedy scheduled for M4 (persisted-persistence milestone).",
+    "R-01": "Legacy seeded SQLite DB lacks alembic_version; alembic upgrade head fails 'table departments already exists'. M4 evidence covers empty/isolated databases only; remediating the legacy seeded DB remains an operator data-migration task.",
     "R-02": "Windows Application Control blocks SQLAlchemy 2.1.x compiled DLLs; repository currently runs SQLAlchemy 2.0.55 (pure-python wheel, within sqlalchemy>=2.0).",
     "R-03": "GPU compositor previously composited CSS filter/backdrop-filter layers above portaled dialog content; dialogs now use a fully transparent backdrop (operator decision).",
     "R-04": "Headless UI tests run with --disable-gpu; GPU-only regressions cannot be detected by automation.",
     "R-05": "Docker daemon availability unknown to the baseline; M10 verification may be BLOCKED.",
     "R-06": "Single-commit history with large uncommitted operator changes; preserve, do not stage or commit without authorization.",
-    "R-07": "CRLF/LF autocrlf conversion warnings; avoid normalizing untouched files."
+    "R-07": "CRLF/LF autocrlf conversion warnings; avoid normalizing untouched files.",
+    "R-08": "Phase 2 requires PostgreSQL-backed evidence for row locks, leases, outbox claims, and scheduler uniqueness; SQLite cannot certify those concurrency claims. M12/M13 must provision a PostgreSQL test service.",
+    "R-09": "No physical or virtual device lab is assumed. Provisioning and drift tests must use adapter fakes and recorded fixtures; real-device validation is a separate operator-approved gate.",
+    "R-10": "Device credentials and raw configurations are sensitive. Workers must not persist secrets; snapshots must be redacted before storage and raw config retention, if enabled, must be encrypted and time-bounded."
   }
 }

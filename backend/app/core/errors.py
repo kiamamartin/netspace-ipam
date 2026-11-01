@@ -75,6 +75,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         "subnet_not_empty": 409,
         "duplicate_assignment": 409,
         "ip_assigned": 409,
+        "invalid_transition": 409,
         "plan_archived": 409,
         "plan_active": 409,
         "plan_empty": 409,

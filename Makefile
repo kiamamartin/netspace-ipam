@@ -23,11 +23,11 @@ backend-setup: ## Create the backend venv and install it (editable) with dev dep
 backend-migrate: ## Apply database migrations (Alembic) to the dev database
 	cd backend && $(BACKEND_PY) -m alembic upgrade head
 
-run-backend: ## Start the FastAPI backend on :8000
-	cd backend && $(BACKEND_PY) -m uvicorn app.main:app --port 8000
+run-backend: ## Start the FastAPI backend on :8001
+	cd backend && $(BACKEND_PY) -m uvicorn app.main:app --port 8001
 
-run-frontend: ## Start the Vite dev server on :5173 (proxies /api to :8000)
-	cd frontend && npm install --no-fund --no-audit && npm run dev
+run-frontend: ## Start the Vite dev server on :5173 (proxies /api to :8001)
+	cd frontend && npm install --no-fund --no-audit && NETSPACE_BACKEND_URL=http://localhost:8001 npm run dev
 
 # --- checks ----------------------------------------------------------------
 
@@ -44,7 +44,7 @@ verify: ## Full verification gates (deps, lockfile, lint, tests, secrets, health
 
 # --- docker (deployment parity check, e.g. on Fedora) ----------------------
 
-docker-up: ## Build and start the Docker stack (web :8080, api :8000)
+docker-up: ## Build and start the Docker stack (web :8080, api :8001)
 	docker compose up --build -d
 	docker compose ps
 

@@ -1,7 +1,11 @@
 /**
- * NetSpace IPAM — UI smoke test (headless Edge + puppeteer-core).
+ * NetSpace IPAM — UI smoke test (headless browser + puppeteer-core).
  * Run while `npm run dev` and the backend are up on :5173 / :8000.
- * Exercises every page plus the Ark UI dialogs, menus, tabs and toasts.
+ * Exercises every page plus the Ark UI dialogs, menus, tabs and toasts,
+ * the M5 login flow, M6 backend-error/viewport states and M7 subnet fields.
+ *
+ * Login credentials are supplied by the environment (SMOKE_USER / SMOKE_PASS,
+ * default admin) and are never hard-coded into the repository.
  */
 import puppeteer from 'puppeteer-core'
 import { mkdirSync } from 'node:fs'
@@ -21,7 +25,9 @@ const EDGE_CANDIDATES =
       ? ['/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge']
       : ['/usr/bin/microsoft-edge', '/usr/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/chromium-browser']
 const EDGE = process.env.EDGE_PATH || EDGE_CANDIDATES.find((p) => existsSync(p)) || EDGE_CANDIDATES[0]
-const BASE = 'http://localhost:5173'
+const BASE = process.env.SMOKE_BASE || 'http://localhost:5173'
+const SMOKE_USER = process.env.SMOKE_USER || 'admin'
+const SMOKE_PASS = process.env.SMOKE_PASS || ''
 const SHOTS = join(tmpdir(), 'netspace-smoke')
 mkdirSync(SHOTS, { recursive: true })
 
@@ -47,11 +53,23 @@ const browser = await puppeteer.launch({
 })
 const page = await browser.newPage()
 page.on('console', (m) => {
-  if (m.type() === 'error') problems.push('console.error: ' + m.text())
+  if (m.type() === 'error')
+    problems.push('console.error: ' + m.text() + ' at ' + (m.location()?.url ?? '?'))
 })
 page.on('pageerror', (e) => problems.push('pageerror: ' + e.message))
 page.on('requestfailed', (r) => {
-  if (!r.url().includes('favicon')) problems.push('requestfailed: ' + r.url())
+  if (!r.url().includes('favicon'))
+    problems.push(
+      'requestfailed T+' +
+        ((Date.now() - T0.getTime()) / 1000).toFixed(2) +
+        ' [' +
+        r.method() +
+        ' ' +
+        r.url() +
+        '] [' +
+        (r.failure()?.errorText ?? '?') +
+        ']',
+    )
 })
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -60,6 +78,14 @@ async function go(path, waitFor) {
   await page.goto(BASE + path, { waitUntil: 'domcontentloaded' })
   if (waitFor) await page.waitForSelector(waitFor, { timeout: 10000 })
   await sleep(250)
+}
+const DEBUG_REQUESTS = process.env.SMOKE_DEBUG === '1'
+const T0 = new Date()
+if (DEBUG_REQUESTS) {
+  page.on('request', (rq) => {
+    if (rq.url().includes('/api/'))
+      console.log(`REQ T+${((Date.now() - T0.getTime()) / 1000).toFixed(2)}`, rq.method(), rq.url().slice(BASE.length))
+  })
 }
 async function shot(name) {
   await page.screenshot({ path: join(SHOTS, name + '.png') })
@@ -81,6 +107,32 @@ async function clickText(selector, text) {
 }
 
 try {
+  /* --- 0. Login (M5 authentication flow) ---------------------------- */
+  if (!SMOKE_PASS) {
+    fail('login config', 'SMOKE_PASS is not set; refusing to run unauthenticated')
+    throw new Error('SMOKE_PASS required')
+  }
+  // signed out by removing any stale session (the app shows the login card on
+  // every route while localStorage holds no user — there is no /login route)
+  await page.goto(BASE + '/', { waitUntil: 'domcontentloaded' })
+  await page.evaluate(() => {
+    localStorage.removeItem('netspace.token')
+    localStorage.removeItem('netspace.user')
+  })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('form', { timeout: 10000 })
+  const userField = await page.$('input[name="username"], input[autocomplete="username"]')
+  const passField = await page.$('input[name="password"], input[type="password"]')
+  if (!userField || !passField) fail('login form', 'username/password inputs not found')
+  else {
+    await userField.type(SMOKE_USER)
+    await passField.type(SMOKE_PASS)
+    await page.click('form button[type="submit"], form button')
+    await page.waitForSelector('.app-shell', { timeout: 10000 })
+    ok('login', `signed in as ${SMOKE_USER}; app shell rendered`)
+    await go('/', '.stat')
+  }
+
   /* --- 1. Dashboard ------------------------------------------------ */
   await go('/', '.stat')
   const stats = await page.$$eval('.stat .value', (els) => els.map((e) => e.textContent.trim()))
@@ -90,8 +142,10 @@ try {
   if (meters > 0) ok('dashboard meters', `${meters} Ark Progress meters`)
   else fail('dashboard meters', 'no Ark Progress components rendered')
   const navCount = await page.$$eval('.nav-link', (els) => els.length)
-  if (navCount === 7) ok('sidebar nav', '7 links in 3 sections')
-  else fail('sidebar nav', `expected 7 links, got ${navCount}`)
+  const navRole = await page.$eval('.role-badge .badge', (el) => el.textContent.trim())
+  const expectedNav = navRole === 'admin' ? 8 : 7
+  if (navCount === expectedNav) ok('sidebar nav', `${navCount} links for ${navRole}`)
+  else fail('sidebar nav', `expected ${expectedNav} links for ${navRole}, got ${navCount}`)
   await shot('01-dashboard')
 
   /* --- 1b. Theme toggle + persistence ------------------------------- */
@@ -161,10 +215,14 @@ try {
 
   /* --- 6. Departments: full CRUD round trip through Ark UI ---------- */
   // self-cleaning fixture: remove leftovers from a previously crashed run
-  // (a duplicate name would 409 and break the create step below)
-  const existing = await (await fetch(`${BASE}/api/v1/departments?page_size=200`)).json()
+  // (a duplicate name would 409 and break the create step below); the fetches
+  // carry the operator token — unauthenticated deletes would 401 and pollute
+  // the console-error log below
+  const tok = await page.evaluate(() => localStorage.getItem('netspace.token'))
+  const headers = tok ? { Authorization: `Bearer ${tok}` } : {}
+  const existing = await (await fetch(`${BASE}/api/v1/departments?page_size=200`, { headers })).json()
   for (const d of existing.items.filter((x) => x.name === 'Smoke Test Dept')) {
-    await fetch(`${BASE}/api/v1/departments/${d.id}`, { method: 'DELETE' })
+    await fetch(`${BASE}/api/v1/departments/${d.id}`, { method: 'DELETE', headers })
   }
   await go('/departments', 'table, .empty')
   await clickText('button', 'New department')
@@ -270,6 +328,66 @@ try {
   if (selects >= 2) ok('ip filters', `${selects} Ark Selects on page`)
   else fail('ip filters', `expected >=2 selects, got ${selects}`)
   await shot('09-ip-addresses')
+
+  /* --- 8. Backend validation errors surface in the UI (M6-AC-005) --- */
+  await go('/networks', 'table')
+  await clickText('button', 'New network')
+  await page.waitForSelector('[data-scope="dialog"][data-part="content"]', { timeout: 5000 })
+  const netInputs = await page.$$('[data-scope="dialog"] [data-scope="field"] [data-part="input"]')
+  if (netInputs.length < 2) fail('validation surface', 'network dialog inputs missing')
+  else {
+    await netInputs[0].type('Smoke Invalid Net')
+    await netInputs[1].type('not-a-cidr')
+    await clickText('[data-scope="dialog"] button[type="submit"]', 'Create network')
+    await page
+      .waitForSelector('[data-scope="toast"][data-part="root"][data-type="error"], .banner.error', {
+        timeout: 8000,
+      })
+      .then(() => ok('validation surface', 'invalid CIDR produced a visible backend error'))
+      .catch(() => fail('validation surface', 'no visible error for invalid CIDR'))
+    await shot('10-validation-error')
+  }
+  await page.keyboard.press('Escape')
+
+  /* --- 9. Mobile viewport (M6-AC-003) ------------------------------- */
+  await page.setViewport({ width: 375, height: 812, isMobile: true, hasTouch: true })
+  await go('/', '.stat')
+  const mobile = await page.evaluate(() => ({
+    overflowX: document.documentElement.scrollWidth - window.innerWidth,
+    stats: document.querySelectorAll('.stat').length,
+    navVisible: [...document.querySelectorAll('.nav-link')].some(
+      (el) => el.getClientRects().length > 0,
+    ),
+  }))
+  if (mobile.stats >= 4 && mobile.overflowX <= 2)
+    ok('mobile dashboard', `375px viewport renders all stats (overflow ${mobile.overflowX}px)`)
+  else fail('mobile dashboard', JSON.stringify(mobile))
+  await go('/networks', 'table')
+  const tableFits = await page.evaluate(() => {
+    const wrap = document.querySelector('.table-wrap')
+    if (!wrap) return null
+    return {
+      wraps: !!wrap,
+      // the wrapper may scroll horizontally for wide tables; the page itself
+      // must not be pushed off-screen by raw table overflow
+      docOverflow: document.documentElement.scrollWidth - window.innerWidth,
+    }
+  })
+  if (tableFits && tableFits.wraps)
+    ok('mobile tables', `networks table wrapped; page overflow ${tableFits.docOverflow}px`)
+  else fail('mobile tables', 'no .table-wrap on mobile networks page')
+  await shot('11-mobile-networks')
+  // restore the desktop viewport for a clean shell state
+  await page.setViewport({ width: 1440, height: 900 })
+
+  /* --- 10. Subnet owner/location fields (M7 wire-up) ----------------- */
+  await go('/networks/1', 'table')
+  const hasOwnerCol = await page.evaluate(() =>
+    [...document.querySelectorAll('table th')].some((th) => th.textContent.trim() === 'Owner'),
+  )
+  if (hasOwnerCol) ok('subnet owner/location columns', 'Owner and Location rendered in subnet table')
+  else fail('subnet owner/location columns', 'Owner column missing on network detail page')
+  await shot('12-network-detail-m7')
 
   console.log('\n===== SMOKE RESULTS =====')
   for (const r of results) console.log(r)

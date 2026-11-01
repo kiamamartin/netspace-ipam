@@ -1,6 +1,8 @@
 # NetSpace IPAM — Delivery Report
 
-Date: 2026-10-15 · Algorithm version: `vlsm-1.0.0`
+Date: 2026-11-01 · Algorithm version: `vlsm-1.0.0`
+
+Delivered scope: M0–M7. M8–M10 remain in progress.
 
 ## What was delivered
 
@@ -10,9 +12,11 @@ Date: 2026-10-15 · Algorithm version: `vlsm-1.0.0`
 | API | FastAPI `/api/v1`: calculator, networks, subnets, IPs, departments, plans, reports, dashboard, audit |
 | Persistence | SQLAlchemy models + Alembic migrations (upgrade/downgrade verified by tests), SQLite default, any SQLAlchemy URL via `NETSPACE_DATABASE_URL` |
 | Plans | Draft → activate (transactional) → recalculate → archive lifecycle with conflict detection |
-| Frontend | React 19 + TS (Vite): Dashboard, Calculator, VLSM Planner, Plans, Networks, IP Addresses, Departments |
+| Authentication | Bearer-token login, viewer/operator/admin matrix, admin user CRUD, login rate limiting, request-size guard |
+| Frontend | React 19 + TS (Vite): Dashboard, Calculator, VLSM Planner, Plans, Networks, IP Addresses, Departments, Users; responsive shell, light/dark theme, print styles |
+| Inventory lifecycle | Subnet/IP reservation and release, owner/location tracking, utilization and remaining capacity, per-resource audit history |
 | Reports | CSV (metadata preamble), XLSX (4 sheets), PDF (uncompressed streams, greppable) + print stylesheet |
-| Ops | Dockerfiles (backend, frontend/nginx), `docker-compose.yml`, `.env.example`, docs |
+| Ops | Dockerfiles (backend, frontend/nginx), `docker-compose.yml`, `.env.example`, docs, headless UI smoke suite |
 
 ## Acceptance criteria
 
@@ -42,6 +46,33 @@ Verified live via `POST /api/v1/calculator/vlsm` (also pinned by
 Property tests run 300 random IPv4 + 50 random IPv6 allocations and 100
 growth/reservation/gateway scenarios against these invariants.
 
+### Authentication and authorization (M5)
+
+- `POST /api/v1/auth/login` issues a signed bearer token; `/auth/me` resolves the
+  authoritative identity.
+- Roles: `viewer` (read), `operator` (inventory/planning writes), `admin`
+  (users, audit events, all writes). Anonymous writes receive `401`; forbidden
+  role actions receive `403` server-side.
+- Admin-only user lifecycle with audit events on create/update/delete; the last
+  admin and self-deactivation/self-demotion are protected.
+- Login attempts are limited (5 per 60 s per client IP); request bodies above
+  1 MiB are rejected with `413`.
+- The enterprise seed creates or updates `admin`, `operator` and `viewer`
+  accounts from `NETSPACE_SEED_*_PASSWORD` environment variables; no passwords
+  are stored in the repository.
+
+### Inventory lifecycle and governance (M7)
+
+- Parent networks contain aligned, non-overlapping subnets with owner, location,
+  purpose, VLAN and lifecycle status.
+- Subnet and IP reservation/release workflows enforce valid transitions and
+  reject conflicting/duplicate allocations; forced subnet release is explicit.
+- Utilization, usable/remaining capacity and tracked-address counts are exposed
+  in list and detail read models and rendered in the UI.
+- Released resources and their audit events remain queryable through
+  `/subnets/{id}/history` and `/ip-addresses/{id}/history`.
+- Department filtering and assignment are available for tracked addresses.
+
 ### Validation & safety
 
 - Host-bits-set CIDRs → `422` (creation endpoints reject, calculator normalizes with warning)
@@ -54,21 +85,20 @@ growth/reservation/gateway scenarios against these invariants.
 
 | Check | Result |
 | --- | --- |
-| `backend: pytest -q` | **155 passed** (engine, API, invariants, migrations, exports) |
+| `backend: pytest -q` | **204 passed** (engine, API, auth, inventory, concurrency, migrations, exports) |
 | `backend: ruff check .` | **clean** (E, F, I, W) |
 | `frontend: npm run build` (tsc + vite) | **clean** |
-| `frontend: npm run lint` (oxlint) | **0 warnings, 0 errors** |
-| End-to-end via dev server | Vite on `:5173` proxies to uvicorn; verified health, dashboard, network create, subnet allocate (201), misaligned subnet (422), VLSM preview, plan save + activate (2 subnets created), IP register, all **6 report exports** (200; CSV preamble + header on row 5; PDF starts `%PDF-`), dashboard metrics update |
+| `frontend: npm run lint` (oxlint) | **clean** (one pre-existing `ui.tsx` advisory warning) |
+| Headless UI smoke | **27 checks passed** against backend `:8001` + Vite `:5174`: login, dashboard, nav, dialogs, toasts, validation error, 375 px mobile layout, lifecycle/history UI |
+| Role walkthrough | viewer/operator dashboards render without errors; admin Users page lists accounts; subnet utilization meters and history dialog verified |
+| Seeded dataset | 12 networks, 42 subnets, 82 tracked IPs, 3 plans, 153 audit events, 3 role accounts |
 
 ## Notes & limitations
 
-- **Docker not executed here**: no Docker daemon on this machine. Dockerfiles and
-  `docker-compose.yml` follow standard patterns (python:3.12-slim + node:22-alpine
-  build + nginx proxy) but were not built/run locally.
-- **UI verified over HTTP, not click-tested**: no browser available in this
-  environment; every page's data path was exercised through the dev-server proxy
-  (`localhost:5173`) with real backend responses, and the production build type-checks.
+- **M8–M10 not yet delivered**: governance reporting, reliability/security/performance certification, and deployment/backup/restore evidence remain open.
+- **Docker not executed here**: no Docker daemon is available on this machine. Dockerfiles and `docker-compose.yml` follow standard patterns (python:3.12-slim + node:22-alpine build + nginx proxy) but were not built/run locally. M10 requires replacement evidence from a Docker-capable environment or an approved equivalent.
+- **UI verified headless**: functional flows are click-tested with Chromium; GPU compositor behaviour is not covered (risk R-04).
 - Default DB is SQLite (`backend/netspace.db`); set `NETSPACE_DATABASE_URL` for
-  PostgreSQL and run `alembic upgrade head`.
+  PostgreSQL and run `alembic upgrade head`. The seed backs up the SQLite file before resetting.
 - PDF/XLSX/CSV exports are landscape-A4 oriented; the print stylesheet hides
   navigation/actions and repeats table headers across pages.

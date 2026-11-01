@@ -271,6 +271,23 @@ def test_audit_events_admin_only(client: TestClient, users) -> None:
     assert client.get("/api/v1/audit-events", headers=viewer).status_code == 403
 
 
+def test_dashboard_summary_readable_by_non_admin_roles(client: TestClient, users) -> None:
+    """Regression: operator/viewer dashboards use the summary read model.
+
+    The summary embeds recent activity, so non-admin roles can render the
+    dashboard without calling the admin-only /audit-events endpoint.
+    """
+    tokens = users["tokens"]
+    operator = tokens("operatoruser", "OperatorPass1!")
+    viewer = tokens("vieweruser", "ViewerPass1!")
+    for headers in (operator, viewer):
+        r = client.get("/api/v1/dashboard/summary", headers=headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert isinstance(body["recent_activity"], list)
+        assert "total_networks" in body
+
+
 def test_login_rate_limited(client: TestClient) -> None:
     """M5-AC-007: rate limits on the exposed login endpoint.
 

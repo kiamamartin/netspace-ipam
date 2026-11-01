@@ -14,12 +14,15 @@ validation and report is computed server-side — the UI is a thin client.
   percentages, reserved addresses, VLANs and **gateway-pinned subnets**;
   preview → save as plan → activate (transactional commit to inventory).
 - **IPAM inventory** — networks, subnets, tracked IP addresses, departments;
-  containment / alignment / overlap validation on every write, full audit trail.
+  containment / alignment / overlap validation on every write, full audit trail,
+  utilization meters, reservations/release and per-resource history.
 - **Allocation plans** — saved, recalculatable, previewable plans with
   draft → active → archived lifecycle and conflict detection on activation.
 - **Reports** — CSV, Excel (XLSX) and PDF exports plus print-optimized views.
 - **Dashboard** — utilization meters, near-capacity warnings, conflict list,
   recent activity.
+- **Authentication and roles** — bearer-token login, viewer/operator/admin
+  permissions, admin-only user administration, rate-limited login.
 
 ## Quick start (local development)
 
@@ -45,8 +48,13 @@ Optional — load the realistic enterprise demo dataset (multi-site topology,
 VLANs, tracked IPs, plans; backs up and resets the dev DB):
 
 ```bash
-cd backend && .venv/bin/python scripts/seed_enterprise.py      # Windows: .venv\Scripts\python.exe scripts/seed_enterprise.py
-# see docs/DATA.md for what it contains
+cd backend
+NETSPACE_SEED_ADMIN_PASSWORD='choose-a-password' \
+NETSPACE_SEED_OPERATOR_PASSWORD='choose-a-password' \
+NETSPACE_SEED_VIEWER_PASSWORD='choose-a-password' \
+.venv/bin/python scripts/seed_enterprise.py
+# Windows: set the same variables, then .venv\Scripts\python.exe scripts/seed_enterprise.py
+# see docs/DATA.md for dataset contents and account handling
 ```
 
 ## Quick start (Docker)
@@ -60,10 +68,11 @@ docker compose up --build
 ## Verification
 
 ```bash
-cd backend && pytest -q && ruff check .     # 155 tests, lint clean
+cd backend && pytest -q && ruff check .     # 204 tests, lint clean
 cd frontend && npm run build && npm run lint # tsc + vite build, oxlint clean
-cd frontend && npm run test:ui              # headless-browser UI smoke test (Edge/Chrome,
-                                            # backend + `npm run dev` must be running)
+cd frontend && SMOKE_USER=admin SMOKE_PASS='...' npm run test:ui
+                                            # headless-browser smoke test; backend and
+                                            # `npm run dev` must be running
 ```
 
 ## Repository layout

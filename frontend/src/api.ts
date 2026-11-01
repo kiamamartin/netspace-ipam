@@ -32,7 +32,7 @@ export class ApiError extends Error {
 
 export type Environment = 'production' | 'staging' | 'development' | 'lab'
 export type NetworkStatus = 'active' | 'planned' | 'deprecated'
-export type SubnetStatus = 'allocated' | 'reserved' | 'released'
+export type SubnetStatus = 'allocated' | 'planned' | 'reserved' | 'released'
 export type IPStatus = 'assigned' | 'available' | 'reserved' | 'deprecated'
 export type PlanStatus = 'draft' | 'active' | 'archived' | 'superseded'
 
@@ -49,6 +49,18 @@ export interface Network {
   updated_at: string
 }
 
+export interface SubnetUtilization {
+  total_addresses: number
+  usable_addresses: number
+  tracked_addresses: number
+  assigned_addresses: number
+  reserved_addresses: number
+  available_addresses: number
+  deprecated_addresses: number
+  ip_utilization_percent: number
+  remaining_usable: number
+}
+
 export interface Subnet {
   id: number
   network_id: number
@@ -60,8 +72,11 @@ export interface Subnet {
   gateway: string | null
   status: SubnetStatus
   description: string | null
+  owner: string | null
+  location: string | null
   details: Record<string, unknown>
   ip_address_count: number
+  utilization?: SubnetUtilization
   created_at: string
   updated_at: string
 }
@@ -196,7 +211,7 @@ export interface DashboardSummary {
   networks: NetworkUtilization[]
   conflicts: Record<string, unknown>[]
   near_capacity: NetworkUtilization[]
-  recent_activity: Record<string, unknown>[]
+  recent_activity: AuditEvent[]
 }
 
 export interface AuditEvent {
@@ -205,8 +220,25 @@ export interface AuditEvent {
   resource_id: string
   action: string
   timestamp: string
+  actor?: string | null
+  summary: string | null
+}
+
+export interface HistoryEvent {
+  id: number
+  resource_type: string
+  resource_id: string
+  action: string
+  timestamp: string
   actor: string | null
   summary: string | null
+}
+
+export interface UserAccount {
+  id: number
+  username: string
+  role: 'viewer' | 'operator' | 'admin' | string
+  is_active: boolean
 }
 
 export interface SubnetCalcResult {

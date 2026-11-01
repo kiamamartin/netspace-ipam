@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { getUser } from '../auth'
-import { api, errorMessage, type Environment,
+import { ApiError, api, errorMessage, type Environment,
   type Network,
   type NetworkDetail,
   type Paginated,
@@ -12,8 +12,10 @@ import {
   CopyValue,
   ErrorBanner,
   ExportButtons,
+  HistoryModal,
   Icon,
   Loading,
+  Meter,
   Modal,
   NumberField,
   PageHead,
@@ -36,6 +38,8 @@ function NetworkList() {
   const [data, setData] = useState<Paginated<Network> | null>(null)
   const [page, setPage] = useState(1)
   const [q, setQ] = useState('')
+  const [status, setStatus] = useState('')
+  const [environment, setEnvironment] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -50,11 +54,13 @@ function NetworkList() {
   const load = useCallback(() => {
     const params = new URLSearchParams({ page: String(page), page_size: '20' })
     if (q) params.set('q', q)
+    if (status) params.set('status', status)
+    if (environment) params.set('environment', environment)
     api
       .get<Paginated<Network>>(`/api/v1/networks?${params}`)
       .then(setData)
       .catch((err) => setError(errorMessage(err)))
-  }, [page, q])
+  }, [page, q, status, environment])
 
   useEffect(() => {
     load()
@@ -164,6 +170,32 @@ function NetworkList() {
             }}
             placeholder="Search name, CIDR, site…"
           />
+          <div style={{ width: 160 }}>
+            <SelectField
+              label="Status"
+              hideLabel
+              value={status}
+              onChange={(v) => {
+                setStatus(v)
+                setPage(1)
+              }}
+              options={['active', 'planned', 'deprecated'].map((s) => ({ value: s, label: s }))}
+              placeholder="All statuses"
+            />
+          </div>
+          <div style={{ width: 180 }}>
+            <SelectField
+              label="Environment"
+              hideLabel
+              value={environment}
+              onChange={(v) => {
+                setEnvironment(v)
+                setPage(1)
+              }}
+              options={ENVIRONMENTS.map((e) => ({ value: e, label: e }))}
+              placeholder="All environments"
+            />
+          </div>
         </div>
         {!data || data.items.length === 0 ? (
           <div className="empty">No networks found.</div>
@@ -212,7 +244,8 @@ function NetworkList() {
 /* ------------------------------------------------------------------ */
 /* Network detail (with subnets)                                      */
 /* ------------------------------------------------------------------ */
-const SUBNET_STATUSES = ['allocated', 'reserved', 'released'] as const
+const SUBNET_STATUSES = ['allocated', 'planned', 'reserved', 'released'] as const
+const SUBNET_MANUAL_STATUSES = ['allocated', 'planned'] as const
 
 function NetworkDetailView() {
   const { networkId } = useParams()
@@ -221,11 +254,16 @@ function NetworkDetailView() {
   const [error, setError] = useState<string | null>(null)
   const [showSubnetForm, setShowSubnetForm] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [historySubnet, setHistorySubnet] = useState<Subnet | null>(null)
+  const [subnetQuery, setSubnetQuery] = useState('')
+  const [subnetStatusFilter, setSubnetStatusFilter] = useState('')
   const [subnetForm, setSubnetForm] = useState({
     name: '',
     cidr: '',
     vlan_id: '',
     gateway: '',
+    owner: '',
+    location: '',
     description: '',
   })
 
@@ -251,10 +289,12 @@ function NetworkDetailView() {
         cidr: subnetForm.cidr.trim(),
         vlan_id: subnetForm.vlan_id ? Number(subnetForm.vlan_id) : null,
         gateway: subnetForm.gateway.trim() || null,
+        owner: subnetForm.owner.trim() || null,
+        location: subnetForm.location.trim() || null,
         description: subnetForm.description.trim() || null,
       })
       notify.success('Subnet allocated', `${subnetForm.name} (${subnetForm.cidr})`)
-      setSubnetForm({ name: '', cidr: '', vlan_id: '', gateway: '', description: '' })
+      setSubnetForm({ name: '', cidr: '', vlan_id: '', gateway: '', owner: '', location: '', description: '' })
       setShowSubnetForm(false)
       load()
     } catch (err) {
@@ -273,6 +313,47 @@ function NetworkDetailView() {
       load()
     } catch (err) {
       setError(errorMessage(err))
+    }
+  }
+
+  async function reserveSubnet(subnet: Subnet) {
+    setError(null)
+    try {
+      await api.post(`/api/v1/subnets/${subnet.id}/reserve`)
+      notify.success('Subnet reserved', `${subnet.name} is held for future use.`)
+      load()
+    } catch (err) {
+      setError(errorMessage(err))
+      notify.error('Could not reserve subnet', errorMessage(err))
+    }
+  }
+
+  async function releaseSubnet(subnet: Subnet) {
+    const ok = await confirmAction({
+      title: `Release subnet ${subnet.name}?`,
+      description: `${subnet.cidr} returns to unallocated space. The record and its history are kept.`,
+      confirmLabel: 'Release subnet',
+    })
+    if (!ok) return
+    setError(null)
+    try {
+      try {
+        await api.post(`/api/v1/subnets/${subnet.id}/release`)
+      } catch (err) {
+        if (!(err instanceof ApiError) || err.code !== 'subnet_not_empty') throw err
+        const force = await confirmAction({
+          title: 'Subnet still has addresses',
+          description: 'Assigned or reserved addresses exist. Release anyway and leave them historical?',
+          confirmLabel: 'Force release',
+        })
+        if (!force) return
+        await api.post(`/api/v1/subnets/${subnet.id}/release?force=true`)
+      }
+      notify.success('Subnet released', subnet.name)
+      load()
+    } catch (err) {
+      setError(errorMessage(err))
+      notify.error('Could not release subnet', errorMessage(err))
     }
   }
 
@@ -298,6 +379,16 @@ function NetworkDetailView() {
 
   const detailEntries = Object.entries(net.details).filter(
     ([, v]) => v !== null && v !== undefined && typeof v !== 'object',
+  )
+
+  const needle = subnetQuery.trim().toLowerCase()
+  const visibleSubnets = net.subnets.filter(
+    (s) =>
+      (!subnetStatusFilter || s.status === subnetStatusFilter) &&
+      (!needle ||
+        [s.name, s.cidr, s.gateway, s.owner, s.location, s.description]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(needle))),
   )
 
   return (
@@ -342,12 +433,33 @@ function NetworkDetailView() {
 
       <div className="card">
         <div className="page-head" style={{ marginBottom: 10 }}>
-          <h2 style={{ margin: 0 }}>Subnets ({net.subnets.length})</h2>
-          {user?.role !== 'viewer' ? (
-            <button className="btn small no-print" onClick={() => setShowSubnetForm(true)}>
-              <Icon name="plus" size={13} /> Allocate subnet
-            </button>
-          ) : null}
+          <h2 style={{ margin: 0 }}>
+            Subnets ({visibleSubnets.length}
+            {visibleSubnets.length !== net.subnets.length ? ` of ${net.subnets.length}` : ''})
+          </h2>
+          <div className="inline no-print">
+            <input
+              style={{ maxWidth: 220 }}
+              value={subnetQuery}
+              onChange={(e) => setSubnetQuery(e.target.value)}
+              placeholder="Filter name, CIDR, owner…"
+            />
+            <div style={{ width: 160 }}>
+              <SelectField
+                label="Subnet status"
+                hideLabel
+                value={subnetStatusFilter}
+                onChange={setSubnetStatusFilter}
+                options={SUBNET_STATUSES.map((s) => ({ value: s, label: s }))}
+                placeholder="All statuses"
+              />
+            </div>
+            {user?.role !== 'viewer' ? (
+              <button className="btn small no-print" onClick={() => setShowSubnetForm(true)}>
+                <Icon name="plus" size={13} /> Allocate subnet
+              </button>
+            ) : null}
+          </div>
         </div>
 
       <Modal
@@ -398,6 +510,18 @@ function NetworkDetailView() {
               mono
             />
             <TextField
+              label="Owner"
+              value={subnetForm.owner}
+              onChange={(v) => setSubnetForm({ ...subnetForm, owner: v })}
+              placeholder="IT Voice Team"
+            />
+            <TextField
+              label="Location"
+              value={subnetForm.location}
+              onChange={(v) => setSubnetForm({ ...subnetForm, location: v })}
+              placeholder="HQ comms room A"
+            />
+            <TextField
               label="Description"
               span
               value={subnetForm.description}
@@ -408,6 +532,8 @@ function NetworkDetailView() {
 
         {net.subnets.length === 0 ? (
           <div className="empty">No subnets yet.</div>
+        ) : visibleSubnets.length === 0 ? (
+          <div className="empty">No subnets match the current filters.</div>
         ) : (
           <div className="table-wrap">
             <table>
@@ -417,43 +543,96 @@ function NetworkDetailView() {
                   <th>CIDR</th>
                   <th className="num">VLAN</th>
                   <th>Gateway</th>
+                  <th>Owner</th>
+                  <th>Location</th>
                   <th className="num">IPs</th>
+                  <th>Utilization</th>
                   <th>Status</th>
                   <th className="no-print" />
                 </tr>
               </thead>
               <tbody>
-                {net.subnets.map((s) => (
-                  <tr key={s.id}>
-                    <td>{s.name}</td>
-                    <td>
-                      <CopyValue value={s.cidr} />
-                    </td>
-                    <td className="num">{s.vlan_id ?? '—'}</td>
-                    <td className="mono">{s.gateway ?? '—'}</td>
-                    <td className="num">{s.ip_address_count}</td>
-                    <td>
-                      <Badge status={s.status} />
-                    </td>
-                    <td className="no-print">
-                      <RowMenu
-                        label={`Actions for ${s.name}`}
-                        actions={[
-                          ...SUBNET_STATUSES.filter((st) => st !== s.status).map((st) => ({
-                            label: `Mark ${st}`,
-                            icon: 'refresh' as const,
-                            onSelect: () => setSubnetStatus(s, st),
-                          })),
-                          { label: 'Delete subnet', icon: 'trash' as const, danger: true, onSelect: () => removeSubnet(s), disabled: user?.role === 'viewer' },
-                        ]}
-                      />
-                    </td>
-                  </tr>
-                ))}
+                {visibleSubnets.map((s) => {
+                  const util = s.utilization
+                  return (
+                    <tr key={s.id}>
+                      <td>{s.name}</td>
+                      <td>
+                        <CopyValue value={s.cidr} />
+                      </td>
+                      <td className="num">{s.vlan_id ?? '—'}</td>
+                      <td className="mono">{s.gateway ?? '—'}</td>
+                      <td>{s.owner ?? '—'}</td>
+                      <td>{s.location ?? '—'}</td>
+                      <td className="num">{s.ip_address_count}</td>
+                      <td>
+                        {util ? (
+                          <>
+                            <Meter percent={util.ip_utilization_percent} hot={util.ip_utilization_percent >= 85} />
+                            <span className="small muted">
+                              {util.assigned_addresses + util.reserved_addresses}/{util.usable_addresses} ·{' '}
+                              {util.remaining_usable} free
+                            </span>
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td>
+                        <Badge status={s.status} />
+                      </td>
+                      <td className="no-print">
+                        <RowMenu
+                          label={`Actions for ${s.name}`}
+                          actions={[
+                            ...SUBNET_MANUAL_STATUSES.filter((st) => st !== s.status).map((st) => ({
+                              label: `Mark ${st}`,
+                              icon: 'refresh' as const,
+                              onSelect: () => setSubnetStatus(s, st),
+                              disabled: user?.role === 'viewer',
+                            })),
+                            ...(s.status !== 'reserved' && s.status !== 'released'
+                              ? [{
+                                  label: 'Reserve subnet',
+                                  icon: 'archive' as const,
+                                  onSelect: () => reserveSubnet(s),
+                                  disabled: user?.role === 'viewer',
+                                }]
+                              : []),
+                            ...(s.status !== 'released'
+                              ? [{
+                                  label: 'Release subnet',
+                                  icon: 'power' as const,
+                                  danger: true,
+                                  onSelect: () => releaseSubnet(s),
+                                  disabled: user?.role === 'viewer',
+                                }]
+                              : []),
+                            {
+                              label: 'View history',
+                              icon: 'eye' as const,
+                              onSelect: () => setHistorySubnet(s),
+                            },
+                            { label: 'Delete subnet', icon: 'trash' as const, danger: true, onSelect: () => removeSubnet(s), disabled: user?.role === 'viewer' },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         )}
+
+        <HistoryModal
+          open={historySubnet !== null}
+          onOpenChange={(open) => {
+            if (!open) setHistorySubnet(null)
+          }}
+          title={historySubnet ? `History — ${historySubnet.name}` : 'Subnet history'}
+          path={historySubnet ? `/api/v1/subnets/${historySubnet.id}/history` : ''}
+        />
       </div>
     </>
   )

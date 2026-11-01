@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { getUser } from '../auth'
-import { api, errorMessage, type IPAddress, type IPStatus, type Paginated, type Subnet } from '../api'
+import {
+  api,
+  errorMessage,
+  type Department,
+  type IPAddress,
+  type IPStatus,
+  type Paginated,
+  type Subnet,
+} from '../api'
 import {
   Badge,
   ErrorBanner,
+  HistoryModal,
   Icon,
   Loading,
   Modal,
@@ -18,19 +27,23 @@ import { confirmAction, notify } from '../feedback'
 export default function IpAddresses() {
   const [data, setData] = useState<Paginated<IPAddress> | null>(null)
   const [subnets, setSubnets] = useState<Subnet[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
   const [page, setPage] = useState(1)
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('')
   const [subnetId, setSubnetId] = useState('')
+  const [departmentId, setDepartmentId] = useState('')
   const [error, setError] = useState<string | null>(null)
   const user = getUser()
   const [showForm, setShowForm] = useState(false)
+  const [historyRow, setHistoryRow] = useState<IPAddress | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm] = useState({
     subnet_id: '',
     address: '',
     hostname: '',
     device: '',
+    department_id: '',
     status: 'assigned' as IPStatus,
     description: '',
   })
@@ -40,11 +53,12 @@ export default function IpAddresses() {
     if (q) params.set('q', q)
     if (status) params.set('status', status)
     if (subnetId) params.set('subnet_id', subnetId)
+    if (departmentId) params.set('department_id', departmentId)
     api
       .get<Paginated<IPAddress>>(`/api/v1/ip-addresses?${params}`)
       .then(setData)
       .catch((err) => setError(errorMessage(err)))
-  }, [page, q, status, subnetId])
+  }, [page, q, status, subnetId, departmentId])
 
   // Reload whenever the query, filters or page change.
   useEffect(() => {
@@ -60,6 +74,10 @@ export default function IpAddresses() {
       .catch(() => {
         setSubnets([])
       })
+    api
+      .get<Paginated<Department>>('/api/v1/departments?page_size=200')
+      .then((p) => setDepartments(p.items))
+      .catch(() => setDepartments([]))
   }, [])
 
   const IP_STATUSES: IPStatus[] = ['assigned', 'available', 'reserved', 'deprecated']
@@ -87,11 +105,12 @@ export default function IpAddresses() {
         address: form.address.trim(),
         hostname: form.hostname.trim() || null,
         device: form.device.trim() || null,
+        department_id: form.department_id ? Number(form.department_id) : null,
         status: form.status,
         description: form.description.trim() || null,
       })
       notify.success('Address registered', form.address)
-      setForm({ subnet_id: '', address: '', hostname: '', device: '', status: 'assigned', description: '' })
+      setForm({ subnet_id: '', address: '', hostname: '', device: '', department_id: '', status: 'assigned', description: '' })
       setShowForm(false)
       load()
     } catch (err) {
@@ -114,6 +133,36 @@ export default function IpAddresses() {
       load()
     } catch (err) {
       setError(errorMessage(err))
+    }
+  }
+
+  async function reserveAddress(row: IPAddress) {
+    setError(null)
+    try {
+      await api.post(`/api/v1/ip-addresses/${row.id}/reserve`)
+      notify.success('Address reserved', row.address)
+      load()
+    } catch (err) {
+      setError(errorMessage(err))
+      notify.error('Could not reserve address', errorMessage(err))
+    }
+  }
+
+  async function releaseAddress(row: IPAddress) {
+    const ok = await confirmAction({
+      title: `Release ${row.address}?`,
+      description: 'The reserved tracking row is removed; its history remains in the audit trail.',
+      confirmLabel: 'Release address',
+    })
+    if (!ok) return
+    setError(null)
+    try {
+      await api.post(`/api/v1/ip-addresses/${row.id}/release`)
+      notify.success('Address released', row.address)
+      load()
+    } catch (err) {
+      setError(errorMessage(err))
+      notify.error('Could not release address', errorMessage(err))
     }
   }
 
@@ -142,6 +191,12 @@ export default function IpAddresses() {
   const subnetLabel = (id: number) => {
     const s = subnets.find((x) => x.id === id)
     return s ? `${s.name} (${s.cidr})` : `#${id}`
+  }
+
+  const departmentLabel = (id: number | null) => {
+    if (id === null) return '—'
+    const d = departments.find((x) => x.id === id)
+    return d ? d.name : `#${id}`
   }
 
   return (
@@ -212,6 +267,13 @@ export default function IpAddresses() {
             onChange={(v) => setForm({ ...form, device: v })}
             placeholder="laptop / printer / …"
           />
+          <SelectField
+            label="Department"
+            value={form.department_id}
+            onChange={(v) => setForm({ ...form, department_id: v })}
+            options={departments.map((d) => ({ value: String(d.id), label: d.name }))}
+            placeholder="No department"
+          />
           <TextField
             label="Description"
             span
@@ -258,6 +320,19 @@ export default function IpAddresses() {
               placeholder="All subnets"
             />
           </div>
+          <div style={{ width: 190 }}>
+            <SelectField
+              label="Department"
+              hideLabel
+              value={departmentId}
+              onChange={(v) => {
+                setDepartmentId(v)
+                setPage(1)
+              }}
+              options={departments.map((d) => ({ value: String(d.id), label: d.name }))}
+              placeholder="All departments"
+            />
+          </div>
         </div>
 
         {!data ? (
@@ -273,6 +348,7 @@ export default function IpAddresses() {
                   <th>Subnet</th>
                   <th>Hostname</th>
                   <th>Device</th>
+                  <th>Department</th>
                   <th>Status</th>
                   <th className="no-print" />
                 </tr>
@@ -284,6 +360,7 @@ export default function IpAddresses() {
                     <td className="small">{subnetLabel(row.subnet_id)}</td>
                     <td>{row.hostname ?? '—'}</td>
                     <td>{row.device ?? '—'}</td>
+                    <td>{departmentLabel(row.department_id)}</td>
                     <td>
                       <Badge status={row.status} />
                     </td>
@@ -295,7 +372,30 @@ export default function IpAddresses() {
                             label: `Mark ${s}`,
                             icon: 'refresh' as const,
                             onSelect: () => changeStatus(row, s),
+                            disabled: user?.role === 'viewer',
                           })),
+                          ...(row.status === 'available'
+                            ? [{
+                                label: 'Reserve address',
+                                icon: 'archive' as const,
+                                onSelect: () => reserveAddress(row),
+                                disabled: user?.role === 'viewer',
+                              }]
+                            : []),
+                          ...(row.status === 'reserved'
+                            ? [{
+                                label: 'Release address',
+                                icon: 'power' as const,
+                                danger: true,
+                                onSelect: () => releaseAddress(row),
+                                disabled: user?.role === 'viewer',
+                              }]
+                            : []),
+                          {
+                            label: 'View history',
+                            icon: 'eye' as const,
+                            onSelect: () => setHistoryRow(row),
+                          },
                           { label: 'Remove address', icon: 'trash' as const, danger: true, onSelect: () => remove(row), disabled: user?.role === 'viewer' },
                         ]}
                       />
@@ -309,6 +409,14 @@ export default function IpAddresses() {
         {data && (
           <PaginationBar page={data.page} pages={data.pages} total={data.total} onChange={setPage} />
         )}
+        <HistoryModal
+          open={historyRow !== null}
+          onOpenChange={(open) => {
+            if (!open) setHistoryRow(null)
+          }}
+          title={historyRow ? `History — ${historyRow.address}` : 'Address history'}
+          path={historyRow ? `/api/v1/ip-addresses/${historyRow.id}/history` : ''}
+        />
       </div>
     </>
   )

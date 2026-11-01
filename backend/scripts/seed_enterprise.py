@@ -21,7 +21,9 @@ A timestamped copy of the SQLite file is saved next to it before the reset
 from __future__ import annotations
 
 import argparse
+import os
 import random
+import secrets
 import shutil
 import sys
 from datetime import datetime, timedelta, timezone
@@ -36,6 +38,15 @@ from app.services import ipam_service  # noqa: E402
 
 NOW = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC, matches DB storage
 SEED = 20261016  # deterministic backdating
+
+# Authentication accounts created by the seed. Passwords are never stored in
+# this file: supply them through the environment, or a one-time random password
+# is generated and printed when the account is first created.
+SEED_USERS = (
+    ("admin", "admin", "NETSPACE_SEED_ADMIN_PASSWORD"),
+    ("operator", "operator", "NETSPACE_SEED_OPERATOR_PASSWORD"),
+    ("viewer", "viewer", "NETSPACE_SEED_VIEWER_PASSWORD"),
+)
 
 # ----------------------------------------------------------------------- #
 # Departments (reusable planning defaults per org unit / site)             #
@@ -317,6 +328,52 @@ POLICY = {"growth_percent": 10.0, "utilization_warning_threshold": 80.0}
 RESET_ORDER = ("ip_addresses", "subnets", "allocation_plans", "networks", "departments", "audit_events")
 
 
+def seed_users(db) -> list[str]:
+    """Create the admin/operator/viewer accounts without embedding passwords.
+
+    Existing accounts are preserved unless the matching environment variable
+    supplies a new password. Missing accounts get the environment password or,
+    when none is provided, a generated one that is printed exactly once.
+    """
+    from app.core.security import password_hash
+    from app.models.user import User
+
+    messages: list[str] = []
+    generated: list[str] = []
+    for username, role, env_name in SEED_USERS:
+        password = os.environ.get(env_name, "").strip()
+        if password and len(password) < 8:
+            raise SystemExit(f"{env_name} must be at least 8 characters")
+        existing = db.query(User).filter(User.username == username).first()
+        if existing is not None:
+            if password:
+                existing.role = role
+                existing.password_hash = password_hash(password)
+                existing.is_active = True
+                messages.append(f"{username}: updated ({role})")
+            else:
+                messages.append(
+                    f"{username}: preserved (set {env_name} to reset its password)"
+                )
+            continue
+        shown_password = ""
+        if not password:
+            password = secrets.token_urlsafe(12)
+            shown_password = password
+            generated.append(username)
+        db.add(
+            User(
+                username=username,
+                role=role,
+                password_hash=password_hash(password),
+                is_active=True,
+            )
+        )
+        messages.append(f"{username}: created ({role})" + (f" password={shown_password}" if shown_password else ""))
+    db.commit()
+    return messages
+
+
 def backup_sqlite() -> Path | None:
     """Copy the SQLite file aside before wiping (no-op for other backends)."""
     database = engine.url.database
@@ -483,6 +540,10 @@ def seed() -> None:
         # 6. lived-in timestamps --------------------------------------------
         backdate(db)
         print("timestamps: backdated over the last 8 weeks")
+
+        # 7. authentication accounts ----------------------------------------
+        for message in seed_users(db):
+            print(f"account:     {message}")
     finally:
         db.close()
 

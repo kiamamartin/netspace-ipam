@@ -7,6 +7,7 @@ import Plans from './pages/Plans'
 import Networks from './pages/Networks'
 import IpAddresses from './pages/IpAddresses'
 import Departments from './pages/Departments'
+import Users from './pages/Users'
 import Login from './pages/Login'
 import { clearSession, getUser, onAuthChange, type AuthUser } from './auth'
 import { ConfirmHost, Icon, ThemeToggle, Tip, ToastHost, type IconName } from './ui'
@@ -41,6 +42,11 @@ const NAV_SECTIONS: { title: string; items: NavItem[]; ifAdmin?: boolean; ifOper
       { to: '/departments', label: 'Departments', icon: 'users' },
     ],
   },
+  {
+    title: 'Administration',
+    ifAdmin: true,
+    items: [{ to: '/users', label: 'Users', icon: 'users' }],
+  },
 ]
 
 const TITLES: Record<string, string> = {
@@ -51,6 +57,7 @@ const TITLES: Record<string, string> = {
   '/networks': 'Networks',
   '/ip-addresses': 'IP addresses',
   '/departments': 'Departments',
+  '/users': 'Users',
 }
 
 function pageTitle(pathname: string): string {
@@ -139,6 +146,7 @@ export default function App() {
             <Route path="/networks/:networkId" element={<Networks />} />
             <Route path="/ip-addresses" element={<IpAddresses />} />
             <Route path="/departments" element={<Departments />} />
+            <Route path="/users" element={<Users />} />
             <Route path="*" element={<Dashboard />} />
           </Routes>
         </main>

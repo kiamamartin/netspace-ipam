@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, errorMessage, type AuditEvent, type DashboardSummary } from '../api'
+import { api, errorMessage, type DashboardSummary } from '../api'
 import { ErrorBanner, Loading, Meter, PageHead, Stat, Tip, Icon, CopyValue } from '../ui'
 import { kv } from '../kv'
 
@@ -14,19 +14,14 @@ const ACTION_BADGE: Record<string, string> = {
 
 export default function Dashboard() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
-  const [audit, setAudit] = useState<AuditEvent[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
-    Promise.all([
-      api.get<DashboardSummary>('/api/v1/dashboard/summary'),
-      api.get<{ items: AuditEvent[] }>('/api/v1/audit-events?page_size=12'),
-    ])
-      .then(([s, a]) => {
-        if (!alive) return
-        setSummary(s)
-        setAudit(a.items)
+    api
+      .get<DashboardSummary>('/api/v1/dashboard/summary')
+      .then((s) => {
+        if (alive) setSummary(s)
       })
       .catch((err) => alive && setError(errorMessage(err)))
     return () => {
@@ -37,6 +32,7 @@ export default function Dashboard() {
   if (error) return <ErrorBanner message={error} />
   if (!summary) return <Loading label="Loading dashboard…" />
 
+  const audit = summary.recent_activity
   const ipTotal =
     summary.ip_available + summary.ip_reserved + summary.ip_assigned + summary.ip_deprecated
 
