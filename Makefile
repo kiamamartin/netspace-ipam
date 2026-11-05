@@ -1,7 +1,7 @@
 # NetSpace IPAM — task runner (platform-neutral: Windows Git Bash, Fedora/Linux)
 # Quick reference: `make help`
 
-.PHONY: help backend-setup backend-migrate run-backend run-frontend test lint verify release-check docker-up docker-down
+.PHONY: help backend-setup backend-migrate backend-seed run-backend run-frontend test lint verify release-check docker-up docker-down
 
 # Pick the Python launcher (first one that exists AND executes — skips the
 # Microsoft Store 'python3' stub on Windows) and the venv interpreter, whichever
@@ -25,6 +25,9 @@ backend-migrate: ## Apply database migrations (Alembic) to the dev database
 
 run-backend: ## Start the FastAPI backend on :8001
 	cd backend && $(BACKEND_PY) -m uvicorn app.main:app --port 8001
+
+backend-seed: ## Reset and seed the enterprise topology (Aurora Dynamics) via backend/scripts/seed_enterprise.py
+	cd backend && $(BACKEND_PY) scripts/seed_enterprise.py
 
 ui-checks: ## Headless UI gates (smoke + a11y); needs backend :8001 and vite dev :5173 running
 	cd frontend && node smoke.mjs

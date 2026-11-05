@@ -95,7 +95,7 @@ Re-run 2026-11-05 (M8/M9 gate session):
 | Performance gate (M9) | subnets list 31.6 ms, dashboard 44.8 ms, subnet detail 11.7 ms, CSV export 9.7 ms — all under documented ceilings (`docs/quality/performance-targets.md`) |
 | Headless UI smoke | **27 checks passed** against backend `:8001` + Vite `:5174`: login, dashboard, nav, dialogs, toasts, validation error, 375 px mobile layout, lifecycle/history UI |
 | Role walkthrough | viewer/operator dashboards render without errors; admin Users page lists accounts; subnet utilization meters and history dialog verified |
-| Seeded dataset | 12 networks, 42 subnets, 82 tracked IPs, 3 plans, 153 audit events, 3 role accounts |
+| Seeded dataset | 12 networks, 42 subnets, 82 tracked IPs, 3 plans, 151 audit events, 3 role accounts |
 
 ## Milestone recheck (2026-11-05)
 
@@ -137,5 +137,10 @@ R-08).
 - **UI verified headless**: functional flows are click-tested with Chromium; GPU compositor behaviour is not covered (risk R-04).
 - Default DB is SQLite (`backend/netspace.db`); set `NETSPACE_DATABASE_URL` for
   PostgreSQL and run `alembic upgrade head`. The seed backs up the SQLite file before resetting.
+- The enterprise seed (`backend/scripts/seed_enterprise.py`) was refreshed on
+  2026-11-05: it resets all tables, rebuilds the Aurora Dynamics topology through
+  the real service layer, backdates timestamps over ~8 weeks, and creates the
+  admin/operator/viewer accounts from `NETSPACE_SEED_*_PASSWORD` (no passwords
+  stored in the repository).
 - PDF/XLSX/CSV exports are landscape-A4 oriented; the print stylesheet hides
   navigation/actions and repeats table headers across pages.
