@@ -1,8 +1,9 @@
 # NetSpace IPAM — Delivery Report
 
 Date: 2026-11-01 · Algorithm version: `vlsm-1.0.0`
+Rechecked and updated: 2026-11-05
 
-Delivered scope: M0–M7. M8–M10 remain in progress.
+Delivered scope: **M0–M10** (all Phase 1 gates executed and passed).
 
 ## What was delivered
 
@@ -15,8 +16,8 @@ Delivered scope: M0–M7. M8–M10 remain in progress.
 | Authentication | Bearer-token login, viewer/operator/admin matrix, admin user CRUD, login rate limiting, request-size guard |
 | Frontend | React 19 + TS (Vite): Dashboard, Calculator, VLSM Planner, Plans, Networks, IP Addresses, Departments, Users; responsive shell, light/dark theme, print styles |
 | Inventory lifecycle | Subnet/IP reservation and release, owner/location tracking, utilization and remaining capacity, per-resource audit history |
-| Reports | CSV (metadata preamble), XLSX (4 sheets), PDF (uncompressed streams, greppable) + print stylesheet |
-| Ops | Dockerfiles (backend, frontend/nginx), `docker-compose.yml`, `.env.example`, docs, headless UI smoke suite |
+| Reports | CSV (metadata preamble), XLSX (4 sheets), PDF (uncompressed streams, greppable) + print stylesheet; export endpoints enforce authentication (M8-AC-004) |
+| Ops | Docker deployment verified live (compose build+up, backend healthy), `scripts/healthcheck.sh`, `scripts/backup-restore-drill.sh`, `.env.example`, docs, headless UI smoke suite |
 
 ## Acceptance criteria
 
@@ -83,20 +84,54 @@ growth/reservation/gateway scenarios against these invariants.
 
 ## Verification evidence
 
+Re-run 2026-11-05 (M8/M9 gate session):
+
 | Check | Result |
 | --- | --- |
-| `backend: pytest -q` | **204 passed** (engine, API, auth, inventory, concurrency, migrations, exports) |
+| `backend: pytest -q` | **223 passed** (engine, API, auth, inventory, concurrency, migrations, exports, +M9 resilience/input-abuse/performance gates) |
 | `backend: ruff check .` | **clean** (E, F, I, W) |
 | `frontend: npm run build` (tsc + vite) | **clean** |
 | `frontend: npm run lint` (oxlint) | **clean** (one pre-existing `ui.tsx` advisory warning) |
+| Performance gate (M9) | subnets list 31.6 ms, dashboard 44.8 ms, subnet detail 11.7 ms, CSV export 9.7 ms — all under documented ceilings (`docs/quality/performance-targets.md`) |
 | Headless UI smoke | **27 checks passed** against backend `:8001` + Vite `:5174`: login, dashboard, nav, dialogs, toasts, validation error, 375 px mobile layout, lifecycle/history UI |
 | Role walkthrough | viewer/operator dashboards render without errors; admin Users page lists accounts; subnet utilization meters and history dialog verified |
 | Seeded dataset | 12 networks, 42 subnets, 82 tracked IPs, 3 plans, 153 audit events, 3 role accounts |
 
+## Milestone recheck (2026-11-05)
+
+Re-verified against `MILESTONES.md` acceptance criteria and
+`docs/quality/milestone-status.json`. Verdict for the belief "M10 reached":
+
+**M10 had NOT been reached.** At check start the last PASS gate was M7. The
+recheck found and closed the gaps to advance M8 and M9:
+
+| Milestone | Verdict at check start | Action taken this session |
+| --- | --- | --- |
+| M8 — Governance & Reporting | Implemented but **not passed**: report exports were served without any auth dependency — M8-AC-004 failed | Exports now require a valid token (anonymous `401` before resource resolution, no enumeration); regressions pinned; evidence `docs/baseline/m8-governance-reporting.md` → **PASS** |
+| M9 — Reliability, Security & Performance | Partial: concurrency/authz/abuse covered; DB failure/recovery, performance targets, findings report missing | Added `test_resilience.py` (4 tests), `test_input_abuse.py` (12), `test_performance.py` (1) and `docs/quality/{performance-targets,security-findings,recovery}.md`; evidence `docs/baseline/m9-reliability-security-performance.md` → **PASS** |
+| M10 — Deployment & Operations | **Not started** (`/health` implemented and tested; structured logging existed, but no deployment/backup/restore evidence) | Executed against the live Docker daemon (R-05 resolved — systemd daemon on `/var/run/docker.sock`; the CLI's desktop context socket was stale): images built fresh, `docker compose up -d --build` → backend healthy; `scripts/healthcheck.sh` → 3 PASS; `scripts/backup-restore-drill.sh` → consistent `VACUUM INTO` snapshot hash-verified container↔host and a **demonstrated taken-down restore** (marker row rolled back, counts 12/42/3 restored); diagnostics doc verified command-by-command. Evidence: `docs/baseline/m10-deployment-operations.md`, `docs/quality/service-diagnostics.md` → **PASS** |
+
+Phase 1 (M0–M10) is fully closed. **M11 (v1.0 release gate) was executed on
+2026-11-05**: `make release-check` (new Makefile target) → 223 backend tests,
+ruff clean, frontend tsc+vite+oxlint clean; accessibility gate failed on first
+run and now **passes with 0 axe violations on all 7 pages** (accessible names
+on Ark number/clipboard inputs; `--ok` token darkened to 4.5:1; brand pill
+solid background), UI smoke 27 PASS after the change; `docs/USER-GUIDE.md` and
+`docs/RUNBOOKS.md` written; risk register assessed — no open release blocker.
+Evidence: `docs/baseline/m11-release-certification.md` + logs in
+`docs/evidence/m11/`. **M11-AC-006 (release tag) is the only outstanding
+criterion — it needs an operator-authorized commit of the working tree
+(R-06); everything else is certified.** M12+ belong to Phase 2
+(closed-loop automation, requires PostgreSQL-backed evidence per R-08).
+
 ## Notes & limitations
 
-- **M8–M10 not yet delivered**: governance reporting, reliability/security/performance certification, and deployment/backup/restore evidence remain open.
-- **Docker not executed here**: no Docker daemon is available on this machine. Dockerfiles and `docker-compose.yml` follow standard patterns (python:3.12-slim + node:22-alpine build + nginx proxy) but were not built/run locally. M10 requires replacement evidence from a Docker-capable environment or an approved equivalent.
+- **M10 delivered 2026-11-05** against the systemd Docker daemon
+  (`DOCKER_HOST=unix:///var/run/docker.sock` — the CLI's `desktop-linux`
+  context pointed at an absent Docker Desktop socket and was bypassed). The
+  gate run used a port override (API `:18000`, web `:18080`) because host
+  8000 is held by an unrelated operator container; compose defaults
+  (8000/8080) are unchanged.
 - **UI verified headless**: functional flows are click-tested with Chromium; GPU compositor behaviour is not covered (risk R-04).
 - Default DB is SQLite (`backend/netspace.db`); set `NETSPACE_DATABASE_URL` for
   PostgreSQL and run `alembic upgrade head`. The seed backs up the SQLite file before resetting.

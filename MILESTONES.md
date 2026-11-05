@@ -437,16 +437,18 @@ Base network: `192.168.10.0/24`
 
 **Acceptance criteria:**
 
-- [ ] M11-AC-001: All mandatory tests pass (recorded output).
-- [ ] M11-AC-002: Accessibility checks pass.
-- [ ] M11-AC-003: Documentation reviewed and complete.
-- [ ] M11-AC-004: Blockers closed.
-- [ ] M11-AC-005: Release evidence complete.
+- [x] M11-AC-001: All mandatory tests pass (recorded output).
+- [x] M11-AC-002: Accessibility checks pass.
+- [x] M11-AC-003: Documentation reviewed and complete.
+- [x] M11-AC-004: Blockers closed.
+- [x] M11-AC-005: Release evidence complete.
 - [ ] M11-AC-006: Release candidate tagged (human identity).
 - [ ] M11-AC-007: All final release criteria in M11 and the Universal
       Milestone Gate (§3) are satisfied.
 
-**Test command:** `make release-check`
+**Test command:** `make release-check` — executed 2026-11-05
+(`docs/baseline/m11-release-certification.md`; all criteria PASS except
+AC-006, blocked on an operator-authorized commit/tag per risk R-06).
 
 **Exit evidence required:** Test report path, accessibility report, documentation review record, release tag hash, verification evidence archive.
 

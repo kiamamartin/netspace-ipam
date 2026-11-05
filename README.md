@@ -68,11 +68,13 @@ docker compose up --build
 ## Verification
 
 ```bash
-cd backend && pytest -q && ruff check .     # 204 tests, lint clean
-cd frontend && npm run build && npm run lint # tsc + vite build, oxlint clean
+make release-check                          # backend pytest -q (223 tests) + ruff,
+                                            # frontend tsc + vite build + oxlint
+# with a backend (:8001) and vite dev (:5173) running:
 cd frontend && SMOKE_USER=admin SMOKE_PASS='...' npm run test:ui
-                                            # headless-browser smoke test; backend and
-                                            # `npm run dev` must be running
+                                            # headless-browser smoke test (27 checks)
+cd frontend && SMOKE_USER=admin SMOKE_PASS='...' npm run test:a11y
+                                            # axe-core WCAG 2.x A/AA audit, 7 pages
 ```
 
 ## Repository layout

@@ -63,6 +63,10 @@ Errors: `{"error": {"code", "message", "details": [{"field", "message"}]}}`
 
 ## Reports
 
+Export endpoints require authentication (`Authorization: Bearer ...`); an
+anonymous request receives `401` before the resource is resolved (no
+enumeration).
+
 | Method | Path | Description |
 | --- | --- | --- |
 | GET | `/reports/networks/{id}/csv` \| `xlsx` \| `pdf` | Network report export |

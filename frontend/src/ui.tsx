@@ -485,6 +485,7 @@ export function NumberField({
   max,
   placeholder,
   width,
+  label,
 }: {
   value: string | number
   onChange: (value: number) => void
@@ -492,6 +493,8 @@ export function NumberField({
   max?: number
   placeholder?: string
   width?: number
+  /** Accessible name for the input (required for WCAG 2.1 labels). */
+  label?: string
 }) {
   return (
     <NumberInput.Root
@@ -503,7 +506,7 @@ export function NumberField({
       style={width ? { width } : undefined}
     >
       <NumberInput.Control>
-        <NumberInput.Input placeholder={placeholder} />
+        <NumberInput.Input placeholder={placeholder} aria-label={label ?? placeholder ?? 'Value'} />
         <NumberInput.IncrementTrigger aria-label="Increase">
           <Icon name="chevronDown" size={9} style={{ transform: 'rotate(180deg)' }} />
         </NumberInput.IncrementTrigger>
@@ -649,11 +652,11 @@ export function Tip({ content, children }: { content: string; children: ReactNod
 }
 
 /** Mono value with a one-click copy button (Ark Clipboard). */
-export function CopyValue({ value, className }: { value: string; className?: string }) {
+export function CopyValue({ value, className, label }: { value: string; className?: string; label?: string }) {
   return (
     <Clipboard.Root value={value} className={`inline-copy ${className ?? ''}`}>
       <Clipboard.Control>
-        <Clipboard.Input readOnly className="mono" />
+        <Clipboard.Input readOnly className="mono" aria-label={label ?? `CIDR ${value}`} />
         <Clipboard.Trigger aria-label="Copy to clipboard">
           <Clipboard.Indicator>
             <Icon name="check" size={12} />

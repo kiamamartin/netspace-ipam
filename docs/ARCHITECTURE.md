@@ -1,7 +1,9 @@
 # NetSpace IPAM — Architecture
 
-_Last updated: 2026-11-01 (M6/M7 UI: users administration, subnet/address
-lifecycle actions, history dialogs and utilization read models). See [README.md](README.md) for the docs
+_Last updated: 2026-11-05 (M11 release certification: WCAG 2.x A/AA axe pass on
+all pages — accessible names on Ark `NumberInput`/`Clipboard` inputs, `--ok`
+token darkened to 4.5:1 on `--ok-soft`, brand pill given a solid token
+background; `make release-check` gate added to the Makefile). See [README.md](README.md) for the docs
 maintenance policy that keeps this file current._
 
 ## Document map

@@ -39,6 +39,11 @@ def _admin_token() -> str:
         )
 
 
+def _admin_headers() -> dict[str, str]:
+    """M8-AC-004: exports require authentication — all report reads send a token."""
+    return {"Authorization": f"Bearer {_admin_token()}"}
+
+
 def _seed_network_with_subnets(client: TestClient, subnet_count: int = 3) -> tuple[int, list[str]]:
     import ipaddress
 
@@ -74,7 +79,7 @@ def _seed_network_with_subnets(client: TestClient, subnet_count: int = 3) -> tup
 
 def test_network_csv(client: TestClient) -> None:
     net_id, cidrs = _seed_network_with_subnets(client)
-    r = client.get(f"/api/v1/reports/networks/{net_id}/csv")
+    r = client.get(f"/api/v1/reports/networks/{net_id}/csv", headers=_admin_headers())
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/csv")
     assert 'filename="network-1-report.csv"' in r.headers["content-disposition"]
@@ -92,7 +97,7 @@ def test_network_xlsx(client: TestClient) -> None:
     if openpyxl is None:  # pragma: no cover
         pytest.skip("openpyxl missing")
     net_id, cidrs = _seed_network_with_subnets(client)
-    r = client.get(f"/api/v1/reports/networks/{net_id}/xlsx")
+    r = client.get(f"/api/v1/reports/networks/{net_id}/xlsx", headers=_admin_headers())
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("application/vnd.openxmlformats")
     assert 'filename="network-1-report.xlsx"' in r.headers["content-disposition"]
@@ -110,7 +115,7 @@ def test_network_xlsx(client: TestClient) -> None:
 
 def test_network_pdf(client: TestClient) -> None:
     net_id, _ = _seed_network_with_subnets(client)
-    r = client.get(f"/api/v1/reports/networks/{net_id}/pdf")
+    r = client.get(f"/api/v1/reports/networks/{net_id}/pdf", headers=_admin_headers())
     assert r.status_code == 200
     assert r.headers["content-type"] == "application/pdf"
     assert 'filename="network-1-report.pdf"' in r.headers["content-disposition"]
@@ -132,7 +137,7 @@ def test_plan_exports_match_saved_results(client: TestClient, sample_vlsm_payloa
         a["department"]: a["network"] for a in plan["results"]["allocations"]
     }
 
-    csv_r = client.get(f"/api/v1/reports/allocation-plans/{plan['id']}/csv")
+    csv_r = client.get(f"/api/v1/reports/allocation-plans/{plan['id']}/csv", headers=_admin_headers())
     assert csv_r.status_code == 200
     assert 'filename="allocation-plan-1.csv"' in csv_r.headers["content-disposition"]
     text = csv_r.content.decode("utf-8")
@@ -141,7 +146,7 @@ def test_plan_exports_match_saved_results(client: TestClient, sample_vlsm_payloa
         assert cidr in text
 
     if openpyxl is not None:
-        xlsx_r = client.get(f"/api/v1/reports/allocation-plans/{plan['id']}/xlsx")
+        xlsx_r = client.get(f"/api/v1/reports/allocation-plans/{plan['id']}/xlsx", headers=_admin_headers())
         assert xlsx_r.status_code == 200
         wb = openpyxl.load_workbook(io.BytesIO(xlsx_r.content))
         ws = wb["VLSM Allocation"]
@@ -151,7 +156,7 @@ def test_plan_exports_match_saved_results(client: TestClient, sample_vlsm_payloa
         rem = wb["Remaining Ranges"]
         assert any(cell.value == "192.168.10.160" for row in rem.iter_rows() for cell in row)
 
-    pdf_r = client.get(f"/api/v1/reports/allocation-plans/{plan['id']}/pdf")
+    pdf_r = client.get(f"/api/v1/reports/allocation-plans/{plan['id']}/pdf", headers=_admin_headers())
     assert pdf_r.status_code == 200
     assert pdf_r.content[:5] == b"%PDF-"
     # PDF text contains the CIDRs (streams are uncompressed by reportlab default for text)
@@ -169,7 +174,7 @@ def test_zero_row_reports_are_valid(client: TestClient) -> None:
     )
     net_id = r.json()["id"]
     for fmt in ("csv", "xlsx", "pdf"):
-        r = client.get(f"/api/v1/reports/networks/{net_id}/{fmt}")
+        r = client.get(f"/api/v1/reports/networks/{net_id}/{fmt}", headers=_admin_headers())
         assert r.status_code == 200, fmt
         if fmt == "pdf":
             assert r.content[:5] == b"%PDF-"
@@ -179,7 +184,7 @@ def test_zero_row_reports_are_valid(client: TestClient) -> None:
 
 def test_single_row_report(client: TestClient) -> None:
     net_id, _ = _seed_network_with_subnets(client, subnet_count=1)
-    r = client.get(f"/api/v1/reports/networks/{net_id}/csv")
+    r = client.get(f"/api/v1/reports/networks/{net_id}/csv", headers=_admin_headers())
     assert r.status_code == 200
     rows = list(csv.reader(io.StringIO(r.content.decode("utf-8"))))
     data_rows = [row for row in rows if row and row[0].isdigit()]
@@ -205,19 +210,19 @@ def test_special_characters_sanitized(client: TestClient) -> None:
     )
     assert r.status_code == 201
     for fmt in ("csv", "xlsx", "pdf"):
-        r = client.get(f"/api/v1/reports/networks/{net_id}/{fmt}")
+        r = client.get(f"/api/v1/reports/networks/{net_id}/{fmt}", headers=_admin_headers())
         assert r.status_code == 200, fmt
 
 
 def test_report_missing_resource_404(client: TestClient) -> None:
-    assert client.get("/api/v1/reports/networks/4242/csv").status_code == 404
-    assert client.get("/api/v1/reports/allocation-plans/4242/pdf").status_code == 404
+    assert client.get("/api/v1/reports/networks/4242/csv", headers=_admin_headers()).status_code == 404
+    assert client.get("/api/v1/reports/allocation-plans/4242/pdf", headers=_admin_headers()).status_code == 404
 
 
 def test_reports_use_database_data_not_recalculation(client: TestClient) -> None:
     """Changing the inventory after saving must change the report (it renders stored rows)."""
     net_id, _ = _seed_network_with_subnets(client, subnet_count=2)
-    before = client.get(f"/api/v1/reports/networks/{net_id}/csv").content
+    before = client.get(f"/api/v1/reports/networks/{net_id}/csv", headers=_admin_headers()).content
     r = client.post(
         "/api/v1/subnets",
         json={
@@ -228,5 +233,5 @@ def test_reports_use_database_data_not_recalculation(client: TestClient) -> None
         headers={"Authorization": f"Bearer {_admin_token()}"},
     )
     assert r.status_code == 201, r.text
-    after = client.get(f"/api/v1/reports/networks/{net_id}/csv").content
+    after = client.get(f"/api/v1/reports/networks/{net_id}/csv", headers=_admin_headers()).content
     assert before != after

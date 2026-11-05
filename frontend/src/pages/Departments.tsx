@@ -160,6 +160,7 @@ export default function Departments() {
             onChange={(v) => setForm({ ...form, default_host_requirement: v })}
             min={1}
             placeholder="Default hosts"
+            label="Default hosts"
           />
           <NumberField
             value={form.vlan_id === '' ? '' : Number(form.vlan_id)}
@@ -167,6 +168,7 @@ export default function Departments() {
             min={1}
             max={4094}
             placeholder="Default VLAN"
+            label="Default VLAN"
           />
           <TextField
             label="Site"

@@ -1,7 +1,7 @@
 # NetSpace IPAM — task runner (platform-neutral: Windows Git Bash, Fedora/Linux)
 # Quick reference: `make help`
 
-.PHONY: help backend-setup backend-migrate run-backend run-frontend test lint verify docker-up docker-down
+.PHONY: help backend-setup backend-migrate run-backend run-frontend test lint verify release-check docker-up docker-down
 
 # Pick the Python launcher (first one that exists AND executes — skips the
 # Microsoft Store 'python3' stub on Windows) and the venv interpreter, whichever
@@ -26,6 +26,10 @@ backend-migrate: ## Apply database migrations (Alembic) to the dev database
 run-backend: ## Start the FastAPI backend on :8001
 	cd backend && $(BACKEND_PY) -m uvicorn app.main:app --port 8001
 
+ui-checks: ## Headless UI gates (smoke + a11y); needs backend :8001 and vite dev :5173 running
+	cd frontend && node smoke.mjs
+	cd frontend && node a11y.mjs
+
 run-frontend: ## Start the Vite dev server on :5173 (proxies /api to :8001)
 	cd frontend && npm install --no-fund --no-audit && NETSPACE_BACKEND_URL=http://localhost:8001 npm run dev
 
@@ -42,9 +46,16 @@ lint: ## Lint both sides (ruff + oxlint)
 verify: ## Full verification gates (deps, lockfile, lint, tests, secrets, health*; *needs uvicorn already running)
 	bash scripts/verify-setup.sh
 
+release-check: ## M11 release gate: backend tests+lint, frontend build+lint
+	cd backend && $(BACKEND_PY) -m pytest -q
+	cd backend && $(BACKEND_PY) -m ruff check .
+	cd frontend && npm run build
+	cd frontend && npm run lint
+	@echo "RELEASE CHECK PASS — run frontend a11y (npm run test:a11y with backend+dev servers up) for M11-AC-002"
+
 # --- docker (deployment parity check, e.g. on Fedora) ----------------------
 
-docker-up: ## Build and start the Docker stack (web :8080, api :8001)
+docker-up: ## Build and start the Docker stack (web :8080, api :8000)
 	docker compose up --build -d
 	docker compose ps
 

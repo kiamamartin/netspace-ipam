@@ -501,6 +501,7 @@ function NetworkDetailView() {
               min={1}
               max={4094}
               placeholder="VLAN id"
+              label="VLAN id"
             />
             <TextField
               label="Gateway"

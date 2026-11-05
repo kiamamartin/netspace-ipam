@@ -34,7 +34,7 @@
   --accent-ink: #1a3a8f;
 
   /* status */
-  --ok: #12805c;
+  --ok: #0f6b4d;
   --ok-soft: #e3f6ee;
   --ok-line: #bfe5d4;
   --warn: #a05e03;
@@ -176,9 +176,10 @@ body {
 }
 .brand small {
   font-weight: 500;
-  opacity: 0.6;
+  color: var(--side-ink);
   font-size: 11px;
   border: 1px solid var(--side-line);
+  background: var(--side-bg-2);
   border-radius: 999px;
   padding: 1px 8px;
   margin-left: 2px;

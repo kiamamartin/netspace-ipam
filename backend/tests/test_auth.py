@@ -306,6 +306,45 @@ def test_login_rate_limited(client: TestClient) -> None:
     assert all(r.status_code == 401 for r in results[:5])
 
 
+def test_exports_require_authentication(client: TestClient, users) -> None:
+    """M8-AC-004: report exports enforce permissions.
+
+    Anonymous callers are rejected (401) for every export format; an
+    authenticated read role (viewer) may download exports.
+    """
+    tokens = users["tokens"]
+    admin = tokens("adminuser", "AdminPass1!")
+    r = client.post(
+        "/api/v1/networks",
+        headers=admin,
+        json={"name": "Export Net", "cidr": "192.168.20.0/24"},
+    )
+    assert r.status_code == 201, r.text
+    network_id = r.json()["id"]
+
+    export_paths = [
+        f"/api/v1/reports/networks/{network_id}/{fmt}" for fmt in ("csv", "xlsx", "pdf")
+    ]
+    for path in export_paths:
+        res = client.get(path)
+        assert res.status_code == 401, path
+        assert "error" in res.json(), path
+
+    viewer = tokens("vieweruser", "ViewerPass1!")
+    for path in export_paths:
+        res = client.get(path, headers=viewer)
+        assert res.status_code == 200, path
+        assert "attachment" in res.headers["Content-Disposition"], path
+
+
+def test_export_permission_enforced_for_unknown_resource(client: TestClient, users) -> None:
+    """M8-AC-004 (zombie-parameter variant): auth is checked before 404 resolution."""
+    tokens = users["tokens"]
+    viewer = tokens("vieweruser", "ViewerPass1!")
+    assert client.get("/api/v1/reports/networks/99999/csv").status_code == 401
+    assert client.get("/api/v1/reports/networks/99999/csv", headers=viewer).status_code == 404
+
+
 def test_request_body_size_limited(client: TestClient) -> None:
     """M5-AC-007: request-size limits on exposed services."""
     res = client.post(

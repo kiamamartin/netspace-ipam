@@ -5,6 +5,10 @@
 | [API.md](API.md) | REST endpoint reference (request/response contracts) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Part I: v1 as-built full-stack architecture. Part II: v2 closed-loop automation target architecture, schema, workflows, security, and migration blueprint |
 | [DATA.md](DATA.md) | Enterprise demo dataset: what the seed contains and how to reseed |
+| [USER-GUIDE.md](USER-GUIDE.md) | Operator-facing application guide: roles, pages, planning, lifecycle, reporting |
+| [RUNBOOKS.md](RUNBOOKS.md) | Deployment operations: start/stop, health, backups/migrations, upgrades, incidents |
+| [USER-GUIDE.md](USER-GUIDE.md) | Operator-facing application guide: roles, pages, planning, lifecycle, reporting |
+| [RUNBOOKS.md](RUNBOOKS.md) | Deployment operations: start/stop, health, backups/migrations, upgrades, incidents |
 | [baseline/m6-m7-frontend-inventory.md](baseline/m6-m7-frontend-inventory.md) | M6/M7 gate evidence: frontend workflows, inventory lifecycle, seeded browser verification |
 
 ## Maintenance policy

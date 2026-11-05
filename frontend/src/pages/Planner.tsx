@@ -166,6 +166,7 @@ export default function Planner() {
                       value={r.required_hosts}
                       onChange={(v) => update(r.key, { required_hosts: v })}
                       min={1}
+                      label={`${r.name || 'Department'} required hosts`}
                     />
                   </td>
                   <td style={{ width: 90 }}>
@@ -175,6 +176,7 @@ export default function Planner() {
                       min={1}
                       max={4094}
                       placeholder="—"
+                      label={`${r.name || 'Department'} VLAN ID`}
                     />
                   </td>
                   <td style={{ width: 150 }}>
@@ -189,6 +191,7 @@ export default function Planner() {
                       value={r.additional_reserved_addresses}
                       onChange={(v) => update(r.key, { additional_reserved_addresses: v })}
                       min={0}
+                      label={`${r.name || 'Department'} additional reserved addresses`}
                     />
                   </td>
                   <td style={{ width: 90 }}>

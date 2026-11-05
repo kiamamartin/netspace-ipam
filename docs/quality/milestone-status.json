@@ -1,6 +1,6 @@
 {
   "roadmap": "MILESTONES.md",
-  "updated": "2026-11-01",
+  "updated": "2026-11-05",
   "note": "Machine-readable mirror of MILESTONES.md gate statuses. A gate is a milestone-status, not progress claims. Evidence lives in the evidence_path of each milestone.",
   "milestones": {
     "M0": {
@@ -100,10 +100,63 @@
         "UI history modal verified for a seeded subnet; seeded dataset contains 42 subnets and 82 tracked addresses"
       ]
     },
-    "M8": { "status": "NOT STARTED" },
-    "M9": { "status": "NOT STARTED" },
-    "M10": { "status": "NOT STARTED", "known_risk_refs": ["R-05"] },
-    "M11": { "status": "NOT STARTED" },
+    "M8": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m8-governance-reporting.md",
+      "updated": "2026-11-05",
+      "executed_evidence": [
+        "gate recheck found M8-AC-004 gap: report exports served with no auth dependency (get_current_user_strict imported but never registered)",
+        "gap closed: reports router now APIRouter(dependencies=[Depends(get_current_user_strict)]); anonymous exports -> 401 before resource resolution",
+        "regressions: test_auth.py::test_exports_require_authentication + ::test_export_permission_enforced_for_unknown_resource (2 new)",
+        "reports tests updated to explicit admin auth (anonymous-export behavior was the gap; assertions not weakened)",
+        "report-vs-DB: test_reports_use_database_data_not_recalculation + test_plan_exports_match_saved_results",
+        "dashboard data source: Dashboard.tsx renders /api/v1/dashboard/summary; non-admin access pinned by test_dashboard_summary_readable_by_non_admin_roles",
+        "M8-file tests: test_reports.py 9 passed, test_auth.py 14 passed; full suite 223 passed; ruff clean"
+      ]
+    },
+    "M9": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m9-reliability-security-performance.md",
+      "updated": "2026-11-05",
+      "executed_evidence": [
+        "M9-AC-001: tests/concurrency -> 3 passed (reused M7-AC-008 gate)",
+        "M9-AC-002: tests/test_input_abuse.py -> 12 passed (broken JSON bodies, SQL-metacharacter search payloads inert, LIKE metachars literal, oversized field 422, invalid pagination/enum/path segments, 512-department cap); rate limiting 429 and 1 MiB 413 covered by test_auth.py",
+        "M9-AC-003: tests/test_auth.py role matrix + anonymous write denial across all mutating endpoints -> passed",
+        "M9-AC-004: tests/test_resilience.py -> 4 passed (broken DB -> 500 envelope without internals leak; immediate recovery without restart /health keeps 200; failed commit leaves zero rows; migration drills in test_migrations.py)",
+        "M9-AC-005/-007: tests/test_performance.py -> 1 passed against docs/quality/performance-targets.md ceilings; measured (median of 5, warm): subnets-list 31.6ms, dashboard-summary 44.8ms, subnet-detail 11.7ms, network-csv-export 9.7ms on dataset 8 networks / 64 subnets",
+        "M9-AC-006: docs/quality/security-findings.md -> no unresolved critical/high; controls S-01..S-06 test-backed",
+        "recovery procedure: docs/quality/recovery.md (behavior + backup/restore + migration drill)",
+        "full backend suite 223 passed, ruff clean"
+      ]
+    },
+    "M10": {
+      "status": "PASS",
+      "evidence_path": "docs/baseline/m10-deployment-operations.md",
+      "updated": "2026-11-05",
+      "executed_evidence": [
+        "AC-001: docker compose up -d --build from zero cached project images -> backend Up (healthy), frontend Up (compose-gated on service_healthy); host-8000 occupied by an unrelated operator container, run under documented port override 18000/18080",
+        "AC-002: ./scripts/healthcheck.sh -> 3 PASS (health 200 + read model + web), exit 0",
+        "AC-003: docker compose logs backend -> alembic 0001->0002->0003, uvicorn startup, structured app log line, 86 access lines",
+        "AC-004: ./scripts/backup-restore-drill.sh backup leg -> VACUUM INTO snapshot, integrity ok, sha256 dd601014.../aa47276d... verified container == host on artifact backups/netspace-20261105-134949-backup.db",
+        "AC-005: taken-down restore demonstrated -> marker row rolled back, counts 12/42/3 == pre-drill, backend healthy after restart, exit 0",
+        "AC-006: docs/quality/service-diagnostics.md verified command-by-command against the running stack",
+        "R-05 resolved: docker CLI context pointed at absent Docker Desktop socket; systemd daemon active at /var/run/docker.sock (DOCKER_HOST override)"
+      ]
+    },
+    "M11": {
+      "status": "BLOCKED",
+      "updated": "2026-11-05",
+      "blocked_note": "All criteria executed and PASS except AC-006 (release tag), which requires an operator-authorized commit of the working tree (R-06). Tag with human identity, no agent attribution; record hash afterwards.",
+      "evidence_path": "docs/baseline/m11-release-certification.md",
+      "executed_evidence": [
+        "AC-001: make release-check -> 223 passed (pytest, 17.91s), ruff All checks passed, vite build exit 0, oxlint 1 pre-existing advisory (ui.tsx); log docs/evidence/m11/release-check.log",
+        "AC-002: a11y first run FAIL (10 entries: axe label critical on Ark clipboard/number-input inputs, color-contrast serious on badge.ok + brand pill); fixed in frontend/src (NumberField/CopyValue aria-label props + all call sites, --ok #12805c->#0f6b4d, brand pill solid bg + --side-ink); re-run PASS 0 violations on 7 pages, log docs/evidence/m11/a11y.log; smoke re-run 27 PASS after fix",
+        "AC-003: docs deliverables docs/USER-GUIDE.md + docs/RUNBOOKS.md written; README test count refreshed (223), docs/README.md indexes them, API.md export-auth note added, ARCHITECTURE.md last-updated bumped",
+        "AC-004: risk register assessed in m11 doc — no open release blocker except R-06 for the tag itself",
+        "AC-005/M11-AC-007: evidence archive docs/evidence/m11/ (release-check, a11y, ui-smoke, backend-startup logs); universal §3 checklist all PASS in m11 doc"
+      ],
+      "release_tag": null
+    },
     "M12": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M7", "M10"] },
     "M13": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M12"] },
     "M14": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M13"] },
@@ -116,7 +169,7 @@
     "R-02": "Windows Application Control blocks SQLAlchemy 2.1.x compiled DLLs; repository currently runs SQLAlchemy 2.0.55 (pure-python wheel, within sqlalchemy>=2.0).",
     "R-03": "GPU compositor previously composited CSS filter/backdrop-filter layers above portaled dialog content; dialogs now use a fully transparent backdrop (operator decision).",
     "R-04": "Headless UI tests run with --disable-gpu; GPU-only regressions cannot be detected by automation.",
-    "R-05": "Docker daemon availability unknown to the baseline; M10 verification may be BLOCKED.",
+    "R-05": "RESOLVED 2026-11-05 (was: Docker daemon availability unknown). Docker is installed; systemd daemon runs at /var/run/docker.sock. The CLI's desktop-linux context referenced an absent Docker Desktop socket and is bypassed with DOCKER_HOST=unix:///var/run/docker.sock. M10 executed on this daemon.",
     "R-06": "Single-commit history with large uncommitted operator changes; preserve, do not stage or commit without authorization.",
     "R-07": "CRLF/LF autocrlf conversion warnings; avoid normalizing untouched files.",
     "R-08": "Phase 2 requires PostgreSQL-backed evidence for row locks, leases, outbox claims, and scheduler uniqueness; SQLite cannot certify those concurrency claims. M12/M13 must provision a PostgreSQL test service.",
