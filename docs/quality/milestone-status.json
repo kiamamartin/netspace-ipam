@@ -171,7 +171,7 @@
     "R-05": "RESOLVED 2026-11-05 (was: Docker daemon availability unknown). Docker is installed; systemd daemon runs at /var/run/docker.sock. The CLI's desktop-linux context referenced an absent Docker Desktop socket and is bypassed with DOCKER_HOST=unix:///var/run/docker.sock. M10 executed on this daemon.",
     "R-06": "Single-commit history with large uncommitted operator changes; preserve, do not stage or commit without authorization.",
     "R-07": "CRLF/LF autocrlf conversion warnings; avoid normalizing untouched files.",
-    "R-08": "Phase 2 requires PostgreSQL-backed evidence for row locks, leases, outbox claims, and scheduler uniqueness; SQLite cannot certify those concurrency claims. M12/M13 must provision a PostgreSQL test service.",
+    "R-08": "Phase 2 requires PostgreSQL-backed evidence for row locks, leases, outbox claims, and scheduler uniqueness; SQLite cannot certify those concurrency claims. PROVISIONED 2026-11-05: Neon project sparkling-haze-43162404 (branch production) with Managed Better Auth; Alembic 0001-0003 applied on Postgres; SELECT FOR UPDATE contention verified (SQLSTATE 55P03). M12 must still produce the full locks/leases/outbox/scheduler evidence on this service.",
     "R-09": "No physical or virtual device lab is assumed. Provisioning and drift tests must use adapter fakes and recorded fixtures; real-device validation is a separate operator-approved gate.",
     "R-10": "Device credentials and raw configurations are sensitive. Workers must not persist secrets; snapshots must be redacted before storage and raw config retention, if enabled, must be encrypted and time-bounded."
   }

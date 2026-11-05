@@ -1,9 +1,11 @@
 # NetSpace IPAM — Architecture
 
-_Last updated: 2026-11-05 (M11 release certification: WCAG 2.x A/AA axe pass on
-all pages — accessible names on Ark `NumberInput`/`Clipboard` inputs, `--ok`
-token darkened to 4.5:1 on `--ok-soft`, brand pill given a solid token
-background; `make release-check` gate added to the Makefile). See [README.md](README.md) for the docs
+_Last updated: 2026-11-05 (M11 release certification + Neon service wiring:
+WCAG 2.x A/AA axe pass on all pages; Lakebase Postgres (Neon) applied as the
+PostgreSQL store via `NETSPACE_DATABASE_URL`; Managed Better Auth wired as a
+second identity path — `/neon-signin` SPA page with `@neon/auth`, and
+`GET /api/v1/auth/neon/me` validating bearer JWTs against
+`NEON_AUTH_JWKS_URL`). See [README.md](README.md) for the docs
 maintenance policy that keeps this file current._
 
 ## Document map
@@ -138,8 +140,31 @@ screenshots land in the OS temp dir (`netspace-smoke/`). One benign
 ## Known constraints
 
 - Vite warns the single JS chunk exceeds 500 kB (React + Ark's broad module
-  graph). Candidate follow-up: route-level code splitting.
+  graph). Candidate follow-up: route-level code splitting. The `@neon/auth`
+  SDK raised the bundle to ~758 kB; the same follow-up applies.
 - SQLite by default; the backend is storage-agnostic via SQLAlchemy.
+- **Neon (M12 groundwork, 2026-11-05):** project `sparkling-haze-43162404`
+  (org `org-floral-sky-07815387`), branch `production`, declared in `neon.ts`
+  as `auth: true` and deployed with `neon deploy`.
+  - **Store:** pooled `DATABASE_URL` → `NETSPACE_DATABASE_URL` (backend
+    `.env`); direct `DATABASE_URL_UNPOOLED` is used only for Alembic/DDL.
+    Driver is `psycopg` v3 (`psycopg[binary]`) — SQLAlchemy maps
+    `postgresql://` to it. Migrations `0001→0003` verified on Postgres;
+    `SELECT … FOR UPDATE` blocking verified (SQLSTATE 55P03).
+  - **Auth:** Managed Better Auth in the `neon_auth` schema.
+    `NEON_AUTH_BASE_URL`/`NEON_AUTH_JWKS_URL` are injected by Neon;
+    `VITE_NEON_AUTH_URL` (frontend `.env.local`) is the browser alias env pull
+    does not create. Better Auth stamps `aud`/`iss` with the auth **origin**
+    (no `/db/auth` path), so the verifier enforces signature + expiry and
+    validates `iss` against that origin; audience is not enforced.
+  - v1 username/password bearer auth is unchanged; the Neon identity path is
+    additive (`/neon-signin`, `/api/v1/auth/neon/me`).
+  - **Entry flow:** after a managed sign-in, the SPA exchanges the Neon JWT at
+    `POST /api/v1/auth/neon/session`; the backend provisions a local user keyed
+    by email (default role `NETSPACE_NEON_DEFAULT_ROLE`=`viewer`, admin only for
+    `NETSPACE_NEON_ADMIN_EMAILS`) and returns the standard app bearer session,
+    so the shell opens without a second credential. Disabled local accounts
+    stay disabled.
 
 ---
 

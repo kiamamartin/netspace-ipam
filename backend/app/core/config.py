@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +32,23 @@ class Settings(BaseSettings):
     # value in production; never commit it to source control.
     auth_secret: str = ""
     jwt_expires_minutes: int = 480
+
+    # Neon Auth (Managed Better Auth, M12 groundwork). Values are injected by
+    # `neon deploy` / `neon env pull` with their NEON_* names, so they are read
+    # via explicit aliases instead of the NETSPACE_ prefix.
+    neon_auth_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("NEON_AUTH_BASE_URL", "NETSPACE_NEON_AUTH_BASE_URL"),
+    )
+    neon_auth_jwks_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("NEON_AUTH_JWKS_URL", "NETSPACE_NEON_AUTH_JWKS_URL"),
+    )
+    # Local role given to a Neon identity the first time it signs in. Never
+    # grants more than the v1 role matrix allows; admin must be explicit.
+    neon_default_role: str = "viewer"
+    # Comma-separated emails that map to the local ``admin`` role on exchange.
+    neon_admin_emails: str = ""
     max_request_body_bytes: int = 1_048_576  # 1 MiB guard for exposed endpoints
 
     # Limits
@@ -40,6 +58,10 @@ class Settings(BaseSettings):
 
     # VLSM
     algorithm_version: str = "vlsm-1.0.0"
+
+    @property
+    def neon_admin_email_set(self) -> set[str]:
+        return {e.strip().lower() for e in self.neon_admin_emails.split(",") if e.strip()}
 
     @property
     def cors_origins_list(self) -> list[str]:

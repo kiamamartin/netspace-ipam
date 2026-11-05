@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api, errorMessage } from '../api'
 import { setSession, type AuthUser } from '../auth'
 import { Icon } from '../ui'
@@ -82,6 +83,9 @@ export default function Login({ onSignedIn }: { onSignedIn: (user: AuthUser) => 
             <button className="btn primary" type="submit" disabled={busy || !username || !password}>
               <Icon name="power" size={13} /> {busy ? 'Signing in…' : 'Sign in'}
             </button>
+            <Link className="btn subtle" to="/neon-signin">
+              Neon Auth sign-in
+            </Link>
           </div>
         </form>
       </div>

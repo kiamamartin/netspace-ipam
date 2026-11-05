@@ -9,6 +9,7 @@ from app.api.v1 import (
     dashboard,
     departments,
     ip_addresses,
+    neon_auth,
     networks,
     reports,
     subnets,
@@ -16,6 +17,7 @@ from app.api.v1 import (
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+api_router.include_router(neon_auth.router, prefix="/auth/neon", tags=["auth"])
 api_router.include_router(calculator.router, prefix="/calculator", tags=["calculator"])
 api_router.include_router(networks.router, prefix="/networks", tags=["networks"])
 api_router.include_router(subnets.router, prefix="/subnets", tags=["subnets"])

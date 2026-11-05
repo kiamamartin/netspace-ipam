@@ -9,6 +9,7 @@ import IpAddresses from './pages/IpAddresses'
 import Departments from './pages/Departments'
 import Users from './pages/Users'
 import Login from './pages/Login'
+import NeonSignIn from './pages/NeonSignIn'
 import { clearSession, getUser, onAuthChange, type AuthUser } from './auth'
 import { ConfirmHost, Icon, ThemeToggle, Tip, ToastHost, type IconName } from './ui'
 
@@ -58,6 +59,7 @@ const TITLES: Record<string, string> = {
   '/ip-addresses': 'IP addresses',
   '/departments': 'Departments',
   '/users': 'Users',
+  '/neon-signin': 'Neon Auth sign-in',
 }
 
 function pageTitle(pathname: string): string {
@@ -72,6 +74,11 @@ export default function App() {
 
   // keep the shell in sync with direct clearSession() calls (401 auto-logout)
   useEffect(() => onAuthChange(setUser), [])
+
+  // Neon Auth is a separate identity path and works without the v1 session.
+  if (pathname === '/neon-signin') {
+    return <NeonSignIn />
+  }
 
   if (!user) {
     return <Login onSignedIn={setUser} />

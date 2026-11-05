@@ -48,6 +48,8 @@ Errors: `{"error": {"code", "message", "details": [{"field", "message"}]}}`
 | --- | --- | --- |
 | POST | `/auth/login` | Exchange username/password for a bearer token (rate limited) |
 | GET | `/auth/me` | Current authenticated identity |
+| GET | `/auth/neon/me` | Neon Auth identity: verifies an `Authorization: Bearer <jwt>` issued by Managed Better Auth against `NEON_AUTH_JWKS_URL` (additive second identity path; v1 auth unchanged) |
+| POST | `/auth/neon/session` | Exchange a verified Neon JWT for an app bearer session (same `TokenOut` shape as `/auth/login`). Provisions the local user on first use: role `NETSPACE_NEON_DEFAULT_ROLE` (default `viewer`), or `admin` when the email is listed in `NETSPACE_NEON_ADMIN_EMAILS`. Disabled accounts → `403 account_disabled` |
 | GET/POST | `/auth/users` | List / create users (admin only) |
 | PATCH/DELETE | `/auth/users/{id}` | Update role/password/active flag / delete (admin only) |
 

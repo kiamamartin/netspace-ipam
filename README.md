@@ -57,6 +57,16 @@ NETSPACE_SEED_VIEWER_PASSWORD='choose-a-password' \
 # see docs/DATA.md for dataset contents and account handling
 ```
 
+## Optional: Neon (PostgreSQL + Managed Auth)
+
+The app runs on SQLite out of the box. To use the Postgres store and managed
+identity, link the Neon project (`neon link`) and copy the injected variables
+into `backend/.env` as `NETSPACE_DATABASE_URL` (pooled URL) plus
+`NEON_AUTH_BASE_URL` / `NEON_AUTH_JWKS_URL`; set `VITE_NEON_AUTH_URL` in
+`frontend/.env.local`. Run migrations with the **direct** (unpooled) URL, then
+open `/neon-signin`. Details: `docs/ARCHITECTURE.md` (Known constraints →
+Neon).
+
 ## Quick start (Docker)
 
 ```bash
