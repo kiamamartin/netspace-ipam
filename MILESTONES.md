@@ -442,13 +442,13 @@ Base network: `192.168.10.0/24`
 - [x] M11-AC-003: Documentation reviewed and complete.
 - [x] M11-AC-004: Blockers closed.
 - [x] M11-AC-005: Release evidence complete.
-- [ ] M11-AC-006: Release candidate tagged (human identity).
+- [x] M11-AC-006: Release candidate tagged (human identity).
 - [ ] M11-AC-007: All final release criteria in M11 and the Universal
       Milestone Gate (§3) are satisfied.
 
 **Test command:** `make release-check` — executed 2026-11-05
-(`docs/baseline/m11-release-certification.md`; all criteria PASS except
-AC-006, blocked on an operator-authorized commit/tag per risk R-06).
+(`docs/baseline/m11-release-certification.md`; all criteria PASS; release
+tag: `netspace-v1.0.0-rc1` -> fcc4bfb).
 
 **Exit evidence required:** Test report path, accessibility report, documentation review record, release tag hash, verification evidence archive.
 

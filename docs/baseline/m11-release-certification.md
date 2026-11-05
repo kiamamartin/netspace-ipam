@@ -98,12 +98,12 @@ S-01..S-06 test-backed (auth on exports included).
 
 ## M11-AC-006 · Release candidate tagged (human identity)
 
-**PENDING operator authorization** (risk R-06: the working tree carries large
-uncommitted operator changes — nothing may be staged or committed without an
-explicit ask). All other criteria are PASS; the tag can be cut the moment a
-commit of this baseline is authorized: everything above + `git tag
-netspace-v1.0.0-rc1 <commit>` with the configured human identity, no agent
-attribution (AGENTS.md), tag hash recorded here afterwards.
+**DONE 2026-11-05.** The operator authorized committing the working tree
+(R-06 cleared): release baseline commit `fcc4bfb6896a5128c86655306ae9708a959af2e4`
+(main), annotated with the configured human identity (no attribution, per
+`AGENTS.md`) as **`netspace-v1.0.0-rc1`** — verified with `git tag -l` and
+`git rev-parse netspace-v1.0.0-rc1^{}`. This certification document and the
+tag pointer are recorded in the follow-up docs commit.
 
 ## M11-AC-007 · Universal Milestone Gate (§3) checklist
 
@@ -127,5 +127,5 @@ attribution (AGENTS.md), tag hash recorded here afterwards.
 
 ## Verdict
 
-**M11: PASS on AC-001…AC-005 and AC-007; AC-006 (tag) pending a single
-operator authorization.** v1.0 release candidate otherwise certified.
+**M11: PASS — all acceptance criteria AC-001…AC-007 satisfied.** v1.0
+release candidate certified and tagged `netspace-v1.0.0-rc1`.

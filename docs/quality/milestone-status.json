@@ -144,9 +144,8 @@
       ]
     },
     "M11": {
-      "status": "BLOCKED",
+      "status": "PASS",
       "updated": "2026-11-05",
-      "blocked_note": "All criteria executed and PASS except AC-006 (release tag), which requires an operator-authorized commit of the working tree (R-06). Tag with human identity, no agent attribution; record hash afterwards.",
       "evidence_path": "docs/baseline/m11-release-certification.md",
       "executed_evidence": [
         "AC-001: make release-check -> 223 passed (pytest, 17.91s), ruff All checks passed, vite build exit 0, oxlint 1 pre-existing advisory (ui.tsx); log docs/evidence/m11/release-check.log",
@@ -155,7 +154,7 @@
         "AC-004: risk register assessed in m11 doc — no open release blocker except R-06 for the tag itself",
         "AC-005/M11-AC-007: evidence archive docs/evidence/m11/ (release-check, a11y, ui-smoke, backend-startup logs); universal §3 checklist all PASS in m11 doc"
       ],
-      "release_tag": null
+      "release_tag": "netspace-v1.0.0-rc1 (annotated, human identity; -> commit fcc4bfb6896a5128c86655306ae9708a959af2e4)"
     },
     "M12": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M7", "M10"] },
     "M13": { "status": "NOT STARTED", "phase": "Phase 2 — Closed-Loop Automation", "depends_on": ["M12"] },

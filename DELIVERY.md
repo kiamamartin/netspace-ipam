@@ -119,10 +119,12 @@ on Ark number/clipboard inputs; `--ok` token darkened to 4.5:1; brand pill
 solid background), UI smoke 27 PASS after the change; `docs/USER-GUIDE.md` and
 `docs/RUNBOOKS.md` written; risk register assessed — no open release blocker.
 Evidence: `docs/baseline/m11-release-certification.md` + logs in
-`docs/evidence/m11/`. **M11-AC-006 (release tag) is the only outstanding
-criterion — it needs an operator-authorized commit of the working tree
-(R-06); everything else is certified.** M12+ belong to Phase 2
-(closed-loop automation, requires PostgreSQL-backed evidence per R-08).
+`docs/evidence/m11/`. **Tag AC-006 closed the same day** with operator
+authorization: release baseline commit `fcc4bfb` tagged
+`netspace-v1.0.0-rc1` (annotated, human identity, no attribution per
+AGENTS.md) — **M11 is PASS; Phase 1 (M0–M11) complete.** M12+ belong to
+Phase 2 (closed-loop automation, requires PostgreSQL-backed evidence per
+R-08).
 
 ## Notes & limitations
 
